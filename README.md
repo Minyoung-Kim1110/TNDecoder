@@ -6,8 +6,8 @@ None.
 
 ### 3. Short bullets
 
-- **Project form:** Computational study with a reusable TN (tensor network)–based ML (maximum likelihood) decoder implementing hardware-motivated \(Z\)-noise models (quasi-static \(1/f\) charge noise).
-- **Baseline / comparison:** Compare TN ML decoding against standard minimum-weight decoding (and exact ML in 1D repetition codes) under identical \(p_Z\) noise derived from a \(1/f\) noise model.
+- **Project form:** Computational study with a reusable TN (tensor network)–based ML (maximum likelihood) decoder implementing hardware-motivated $Z$-noise models (quasi-static $1/f$ charge noise).
+- **Baseline / comparison:** Compare TN ML decoding against standard minimum-weight decoding (and exact ML in 1D repetition codes) under identical $p_Z$ noise derived from a $1/f$ noise model.
 - **Full-stack lever:** Demonstrate how hardware-level noise strength (charge-noise amplitude) quantitatively determines logical memory lifetime and the breakdown point of error correction.
 
 ### 4. One motivating reference
