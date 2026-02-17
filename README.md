@@ -15,5 +15,5 @@ None.
 - Error correction decoder with tensor network   
    1.  [J. Darmawan, *Optimal adaptation of surface-code decoders to local noise*, **Phys. Rev. A** (2024)](https://journals.aps.org/pra/abstract/10.1103/r2dc-qcrx)
 - Charge noise in semiconductor device
-   1. [J. M. Gambetta *et al.*, *Semiconductor spin qubits*, **Rev. Mod. Phys. 95, 025003** (2023)](https://journals.aps.org/rmp/abstract/10.1103/RevModPhys.95.025003)
+   1. [J. R. Petta *et al.*, *Semiconductor spin qubits*, **Rev. Mod. Phys. 95, 025003** (2023)](https://journals.aps.org/rmp/abstract/10.1103/RevModPhys.95.025003)
 
