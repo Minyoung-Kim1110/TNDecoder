@@ -2,7 +2,7 @@ import numpy as np
 import numpy.linalg as lin 
 from typing import List, Tuple
 
-MATLAB_style=False
+MATLAB_style=True
 order_type = 'F' if MATLAB_style else 'C' # call the reshape function with order_type 
 
 
@@ -403,9 +403,12 @@ def svd_tr(T, rankT, idU, Nkeep=None, Skeep=None):
 
     Nkeep = min(Nkeep, len(S2))  # Ensure Nkeep is at most the number of singular values
     Nkeep = int(Nkeep)  # Convert to a valid integer for slicing
-
-    if Skeep is None and S2.size > 0:
-        Skeep = 10 * np.finfo(S2.max()).eps  # Set Skeep threshold based on machine epsilon
+    
+    if Skeep is None and len(S2) > 0:
+        Skeep = 10 * np.spacing(S2[0])
+    
+    # if Skeep is None and S2.size > 0:
+    #     Skeep = 10 * np.finfo(S2.max()).eps  # Set Skeep threshold based on machine epsilon
     
     # Determine singular values to keep
     oks = (S2 >= Skeep)
@@ -448,57 +451,57 @@ def canon_form(M, id, Nkeep=None, Skeep=None):
         dw : np.ndarray
             Discarded weight (sum of squared truncated singular values) for each bond.
     """
+    N = len(M)
 
     # Input validation
-    if not isinstance(id, int) or id < 0 or id > len(M)-1:
-        raise ValueError("ERR: The 2nd input 'id' must be an integer in range [0, len(M)).")
-    
+    if not isinstance(id, int) or id < 0 or id > N:
+        raise ValueError("ERR: The 2nd input 'id' must be an integer in range [0, len(M)].")
+
     if M[0].shape[0] != 1:
         raise ValueError("ERR: The first dimension (left leg) of M[0] should be 1.")
-    
+
     if M[-1].shape[1] != 1:
         raise ValueError("ERR: The second dimension (right leg) of M[-1] should be 1.")
 
-    # Initialize discarded weight vector
-    dw = np.zeros(len(M))
+    # discarded weights live on bonds
+    dw = np.zeros(N - 1, dtype=float)
 
-    # Convert left part of MPS into left-canonical form
-    for it in range(id):
-        # SVD decomposition
-        M[it], S, Vd, dw[it] = svd_tr(M[it], 3, [0, 2], Nkeep, Skeep)
-        M[it] = np.transpose(M[it], axes=[0, 2, 1])
+    # Bring left part into left-canonical form
+    for it in range(0, id - 1):
+        U, S, Vd, dw[it] = svd_tr(M[it], 3, [0, 2], Nkeep, Skeep)
+        M[it] = np.transpose(U, (0, 2, 1))
 
-        # Contract S and Vd with the next tensor M[it+1]
-        M[it + 1] = contract(np.diag(S) @ Vd,  1, M[it + 1],  0)
+        M[it + 1] = contract(np.diag(S) @ Vd, 1, M[it + 1], 0)
 
-    # Convert right part of MPS into right-canonical form
-    for it in range(len(M) - 1, id, -1):
-    
-        # SVD decomposition
-        U, S, M[it], dw[it - 1] = svd_tr(M[it], 3, [0], Nkeep, Skeep)
-        # Contract U and S with the previous tensor M[it-1]
-        
-        M[it - 1] = contract(M[it - 1],  1, U @ np.diag(S), 0,  permute_order=[0, 2, 1])
+    # Bring right part into right-canonical form
+    for it in range(N - 1, id, -1):
+        U, S, Vd, dw[it - 1] = svd_tr(M[it], 3, [0], Nkeep, Skeep)
+        M[it] = Vd
 
-    # Purely right-canonical form (id == 0)
+        M[it - 1] = contract(
+            M[it - 1], 1,
+            U @ np.diag(S), 0,
+            permute_order=[0, 2, 1]
+        )
+    # Purely right-canonical
     if id == 0:
-        U, S, M[0], _ = svd_tr(M[0], 3, [0], None, 0)  # No truncation
-        M[0] = contract(U,  1, M[0],  0)
+        U, S, Vd, _ = svd_tr(M[0], 3, [0], None, 0)
+        M[0] = contract(U, 1, Vd, 0)
 
-    # Purely left-canonical form (id == len(M)-1)
-    elif id == len(M)-1:
-        M[-1], S, Vd, _ = svd_tr(M[-1], 3, [0, 2], None, 0)  # No truncation
-        M[-1] = contract(M[-1], 2, Vd,  0, permute_order=[0, 2, 1])
+    # Purely left-canonical
+    elif id == N:
+        U, S, Vd, _ = svd_tr(M[-1], 3, [0, 2], None, 0)
+        M[-1] = np.transpose(U, (0, 2, 1))
+        M[-1] = contract(M[-1], 2, Vd, 0, permute_order=[0, 2, 1])
 
-    # Bond-canonical form
+    # Bond-canonical
     else:
-        T = contract(M[id],  1, M[id+1],  0)
-        M[id], S, M[id+1], dw[id] = svd_tr(T, 4, [0, 1], Nkeep, Skeep)
-        M[id] = np.transpose(M[id], axes=[0, 2, 1])
+        T = contract(M[id - 1], 1, M[id], 0)
+        U, S, Vd, dw[id - 1] = svd_tr(T, 4, [0, 1], Nkeep, Skeep)
+        M[id - 1] = np.transpose(U, (0, 2, 1))
+        M[id] = Vd
 
     return M, S, dw
-
-
 
 
 
