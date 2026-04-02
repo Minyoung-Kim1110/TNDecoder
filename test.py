@@ -1,7 +1,7 @@
 
 import numpy as np
 import string
-from typing import List, Tuple, Dict
+from typing import List, Tuple, Dict, Optional
 from src.functions import * 
 from src.mtimes_MPO import * 
 from src.PEPS import * 
@@ -150,8 +150,6 @@ def run_finpeps_test():
 
     approx = contract_finPEPS(T, Nkeep=Nkeep, Nsweep=Nsweep)
 
-    print("Exact contraction :", exact)
-    print("MPO-MPS contraction:", approx)
     print("Abs diff          :", abs(exact - approx))
     print("Rel diff          :", abs(exact - approx) / (abs(exact) + 1e-30))
 

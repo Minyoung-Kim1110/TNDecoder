@@ -1,4 +1,5 @@
 import numpy as np
+from typing import Dict, Tuple, Optional
 from .PEPS import contract_finPEPS
 
 
@@ -73,31 +74,34 @@ def depolarizing_weights(nrow, ncol, p):
     return biased_pauli_weights(nrow, ncol, 1.0 - p, p / 3.0, p / 3.0, p / 3.0)
 
 # Local tensor construction 
-def _build_face_tensor(row, col, # location of plaquette
-                      sX, sZ, # syndrome measurements 
-                      W_h, W_v):
-    r"""
-    Build one local PEPS tensor for plaquette (row, col) with open boundaries.
-    Leg order: T[left, up, down, right]
-    Bond state flattening:
-        idx = 2*x + z
-        0 -> (0,0)
-        1 -> (0,1)
-        2 -> (1,0)
-        3 -> (1,1)
 
-    Boundary convention:
-        - if the corresponding edge is shared with a neighboring plaquette,
-          the PEPS leg has dimension 4 and contributes sqrt(W)
-        - if the corresponding edge is on the outer boundary of the lattice,
-          the PEPS leg has dimension 1 and contributes full W
+def _build_face_tensor(
+    row: int,
+    col: int, # location of plaquette 
+    sX: np.ndarray,
+    sZ: np.ndarray, # syndrome measurements 
+    W_h: np.ndarray,
+    W_v: np.ndarray, # weights to each edges 
+    active_X: np.ndarray,
+    active_Z: np.ndarray, # masks 
+):
+    r"""
+    Build one local tensor on a rectangular face grid, but only enforce:
+      - X-check syndrome if active_X[row,col] == 1
+      - Z-check syndrome if active_Z[row,col] == 1
+
+    Conventions inherited from your existing code:
+      - horizontal edges: W_h[row, col] (top), W_h[row+1, col] (bottom)
+      - vertical edges:   W_v[row, col] (left), W_v[row, col+1] (right)
+      - bond state flattening: idx = 2*x + z
     """
-    
     sx = int(sX[row, col])
     sz = int(sZ[row, col])
+    ax = int(active_X[row, col])
+    az = int(active_Z[row, col])
+
     nrow, ncol = sX.shape
-    
-    # Open-boundary bond dimensions
+
     Dl = 1 if col == 0 else 4
     Du = 1 if row == 0 else 4
     Dd = 1 if row == nrow - 1 else 4
@@ -105,201 +109,249 @@ def _build_face_tensor(row, col, # location of plaquette
 
     T = np.zeros((Dl, Du, Dd, Dr), dtype=np.float64)
 
-    # Local incident qubit-weight matrices W[x,z]
-    Wu = W_h[row, col]       # top horizontal qubit
-    Wd = W_h[row + 1, col]   # bottom horizontal qubit
-    Wl = W_v[row, col]       # left vertical qubit
-    Wr = W_v[row, col + 1]   # right vertical qubit
+    Wu = W_h[row, col]
+    Wd = W_h[row + 1, col]
+    Wl = W_v[row, col]
+    Wr = W_v[row, col + 1]
 
-    def idx_to_xz(idx):
+    def idx_to_xz(idx: int):
         return idx // 2, idx % 2
 
-    for l in range(Dl):
-        # boundary left edge: sum over local x,z internally
-        left_states = [(0, 0), (0, 1), (1, 0), (1, 1)] if Dl==1 else [idx_to_xz(l)]
-        
-        for u in range(Du):
-            up_states = [(0, 0), (0, 1), (1, 0), (1, 1)] if Du==1 else [idx_to_xz(u)]
-            
-            for d in range(Dd):
-                down_states =  [(0, 0), (0, 1), (1, 0), (1, 1)] if Dd ==1 else  [idx_to_xz(d)]
+    all_states = [(0, 0), (0, 1), (1, 0), (1, 1)]
 
+    for l in range(Dl):
+        left_states = all_states if Dl == 1 else [idx_to_xz(l)]
+        for u in range(Du):
+            up_states = all_states if Du == 1 else [idx_to_xz(u)]
+            for d in range(Dd):
+                down_states = all_states if Dd == 1 else [idx_to_xz(d)]
                 for r in range(Dr):
-                    right_states =  [(0, 0), (0, 1), (1, 0), (1, 1)] if Dr == 1 else [idx_to_xz(r)]
-                    
+                    right_states = all_states if Dr == 1 else [idx_to_xz(r)]
+
                     val = 0.0
 
                     for xl, zl in left_states:
                         for xu, zu in up_states:
                             for xd, zd in down_states:
                                 for xr, zr in right_states:
+                                    # Existing convention in your code:
+                                    # X-check syndrome comes from Z-parity on incident edges
+                                    # Z-check syndrome comes from X-parity on incident edges
+                                    parity_for_Xcheck = zu ^ zd ^ zl ^ zr
+                                    parity_for_Zcheck = xu ^ xd ^ xl ^ xr
 
-                                    parity_z = zu ^ zd ^ zl ^ zr
-                                    parity_x = xu ^ xd ^ xl ^ xr
-
-                                    # check if this matches with syndrome measurement 
-                                    if parity_z != sx or parity_x != sz:
+                                    if ax and parity_for_Xcheck != sx:
+                                        continue
+                                    if az and parity_for_Zcheck != sz:
                                         continue
 
                                     weight = 1.0
-                                    weights = weights * np.sqrt(Wl[xl, zl]) if Dl !=1 else weights *Wl[xl, zl]
-                                    weights = weights * np.sqrt(Wu[xl, zl]) if Du !=1 else weights *Wu[xl, zl]
-                                    weights = weights * np.sqrt(Wd[xl, zl]) if Dd !=1 else weights *Wd[xl, zl]
-                                    weights = weights * np.sqrt(Wr[xl, zl]) if Dr !=1 else weights *Wr[xl, zl]
+                                    weight *= np.sqrt(Wl[xl, zl]) if Dl != 1 else Wl[xl, zl]
+                                    weight *= np.sqrt(Wu[xu, zu]) if Du != 1 else Wu[xu, zu]
+                                    weight *= np.sqrt(Wd[xd, zd]) if Dd != 1 else Wd[xd, zd]
+                                    weight *= np.sqrt(Wr[xr, zr]) if Dr != 1 else Wr[xr, zr]
+
                                     val += weight
 
                     T[l, u, d, r] = val
 
     return T
 
-def build_pauli_syndrome_peps(sX, sZ, W_h, W_v):
-    r"""
-    Build a PEPS T[row][col] such that
-        contract_finPEPS(T) = P(sX, sZ),
-    where
-        P(sX, sZ)= Σ_{all Pauli assignments}[Π_qubits p_q(P_q)] 1[X-syndrome matches sX] 1[Z-syndrome matches sZ]
+def build_pauli_peps(
+    sX: np.ndarray,
+    sZ: np.ndarray,
+    W_h: np.ndarray,
+    W_v: np.ndarray,
+    active_X=None,
+    active_Z=None,
 
-    Input shapes:
-        sX, sZ : (nrow, ncol)
-        W_h    : (nrow+1, ncol, 2, 2)
-        W_v    : (nrow, ncol+1, 2, 2)
+):
+    """
+    Build PEPS for a rectangular embedding.
     """
     sX = np.asarray(sX, dtype=np.uint8)
     sZ = np.asarray(sZ, dtype=np.uint8)
+    nrow, ncol = sX.shape
+    
+    if active_X is None:
+        active_X = np.ones((nrow, ncol), dtype=np.uint8)
+    else:
+        active_X = np.asarray(active_X, dtype=np.uint8)
 
+    if active_Z is None:
+        active_Z = np.ones((nrow, ncol), dtype=np.uint8)
+    else:
+        active_Z = np.asarray(active_Z, dtype=np.uint8)
+    
     if sX.shape != sZ.shape:
         raise ValueError("sX and sZ must have the same shape.")
+    if active_X.shape != sX.shape or active_Z.shape != sX.shape:
+        raise ValueError("active_X and active_Z must have the same shape as sX.")
 
-    nrow, ncol = sX.shape
-    # check if it is validate
     W_h, W_v = validate_local_weight_tensor(W_h, W_v, nrow, ncol)
 
     T = []
     for r in range(nrow):
         row_tensors = []
         for c in range(ncol):
-            row_tensors.append(_build_face_tensor(r, c, sX, sZ, W_h, W_v))
+            A = _build_face_tensor(
+                row=r,
+                col=c,
+                sX=sX,
+                sZ=sZ,
+                active_X=active_X,
+                active_Z=active_Z,
+                W_h=W_h,
+                W_v=W_v,
+            )
+            row_tensors.append(A)
         T.append(row_tensors)
+
     return T
 
 # Logical coset twists 
 def _twist_vertical_cut_x(T, cut_col):
-    r"""
-    Twist a vertical cut that measures logical X parity.
-
-    Logical X parity is read from x-bits crossing a vertical cut: \ell_X = XOR of x on vertical-edge string.
-
-    In the local face tensor, the vertical cut between face columns
-    cut_col-1 and cut_col crosses the RIGHT leg of faces at column cut_col-1.
-
-    To insert (-1)^{x} on crossed edges, multiply components with x=1 by -1.
-    The bond state flattening is idx = 2*x + z, so x=1 corresponds to idx 2,3.
+    """
+    Insert (-1)^x on the vertical cut, matching the convention in PEPS_Pauli_decoder.
     """
     nrow = len(T)
     ncol = len(T[0])
-
     if not (1 <= cut_col <= ncol - 1):
         raise ValueError(f"cut_col must satisfy 1 <= cut_col <= {ncol-1}")
 
     T_tw = [[np.array(A, copy=True) for A in row] for row in T]
     c_left = cut_col - 1
-
     for r in range(nrow):
         A = T_tw[r][c_left]
-        # right leg is axis 3
         A[..., 2] *= -1.0
         A[..., 3] *= -1.0
         T_tw[r][c_left] = A
-
     return T_tw
 
 
 def _twist_horizontal_cut_z(T, cut_row):
-    r"""
-    Twist a horizontal cut that measures logical Z parity.
-
-    Logical Z parity is read from z-bits crossing a horizontal cut: \ell_Z = XOR of z on horizontal-edge string.
-
-    The horizontal cut between face rows cut_row-1 and cut_row crosses the DOWN leg of faces at row cut_row-1.
-
-    To insert (-1)^z on crossed edges, multiply components with z=1 by -1.
-    Since idx = 2*x + z, z=1 corresponds to idx 1,3.
+    """
+    Insert (-1)^z on the horizontal cut, matching the convention in PEPS_Pauli_decoder.
     """
     nrow = len(T)
     ncol = len(T[0])
-
     if not (1 <= cut_row <= nrow - 1):
         raise ValueError(f"cut_row must satisfy 1 <= cut_row <= {nrow-1}")
 
     T_tw = [[np.array(A, copy=True) for A in row] for row in T]
     r_up = cut_row - 1
-
     for c in range(ncol):
         A = T_tw[r_up][c]
-        # down leg is axis 2
         A[:, :, 1, :] *= -1.0
         A[:, :, 3, :] *= -1.0
         T_tw[r_up][c] = A
-
     return T_tw
 
 
-def _contract_with_optional_twists(T, twist_x=False, cut_col=None, twist_z=False, cut_row=None,
-                                   Nkeep=128, Nsweep=1):
-    """
-    Contract plain/twisted variants of the PEPS.
-    """
+def _contract_with_optional_twists(
+    T,
+    *,
+    twist_x=False,
+    cut_col=None,
+    twist_z=False,
+    cut_row=None,
+    Nkeep=128,
+    Nsweep=1,
+):
     T_work = [[np.array(A, copy=True) for A in row] for row in T]
-
     if twist_x:
         T_work = _twist_vertical_cut_x(T_work, cut_col=cut_col)
     if twist_z:
         T_work = _twist_horizontal_cut_z(T_work, cut_row=cut_row)
-
     val = contract_finPEPS(T_work, Nkeep=Nkeep, Nsweep=Nsweep)
     return float(np.real_if_close(val))
 
 
-def pauli_coset_likelihoods_peps(sX, sZ, W_h, W_v, logical_x_cut_col, logical_z_cut_row, Nkeep=128, Nsweep=1):
-    r"""
-    Compute the four logical-coset likelihoods by plain/twisted contractions.
-
-    Let:
-        plain      = Z(0,0)
-        x_twisted  = Z_x
-        z_twisted  = Z_z
-        xz_twisted = Z_xz
-
-    Then the projectors give
-
-        L00 = 1/4 (plain + Z_x + Z_z + Z_xz)
-        L10 = 1/4 (plain - Z_x + Z_z - Z_xz)
-        L01 = 1/4 (plain + Z_x - Z_z - Z_xz)
-        L11 = 1/4 (plain - Z_x - Z_z + Z_xz)
-
-    where first bit = logical X parity lx, second bit = logical Z parity lz.
+def choose_default_logical_cuts(active_X: np.ndarray, active_Z: np.ndarray):
     """
-    T = build_pauli_syndrome_peps(sX, sZ, W_h, W_v)
+    Choose simple middle cuts in the dense rectangular embedding.
+
+    For now:
+      - logical X cut: vertical cut near the middle active columns
+      - logical Z cut: horizontal cut near the middle active rows
+    """
+    active_any = (active_X | active_Z).astype(bool)
+    rows = np.where(active_any.any(axis=1))[0]
+    cols = np.where(active_any.any(axis=0))[0]
+    if len(rows) == 0 or len(cols) == 0:
+        raise ValueError("No active stabilizer support found.")
+
+    # Choose cuts between rows/cols, so convert active extent into an interior cut.
+    cmin, cmax = int(cols[0]), int(cols[-1])
+    rmin, rmax = int(rows[0]), int(rows[-1])
+
+    cut_col = max(1, min((cmin + cmax + 1) // 2, active_any.shape[1] - 1))
+    cut_row = max(1, min((rmin + rmax + 1) // 2, active_any.shape[0] - 1))
+
+    return cut_col, cut_row
+
+def pauli_coset_likelihoods_peps(
+    sX: np.ndarray,
+    sZ: np.ndarray,
+    W_h: np.ndarray,
+    W_v: np.ndarray,
+    active_X=None,
+    active_Z=None,
+    logical_x_cut_col: Optional[int] = None,
+    logical_z_cut_row: Optional[int] = None,
+    Nkeep: int = 128,
+    Nsweep: int = 1,
+):
+    """
+    Same output format as pauli_coset_likelihoods_peps, but for masked surface-code geometry.
+    """
+    T = build_pauli_peps(
+        sX=sX,
+        sZ=sZ,
+        active_X=active_X,
+        active_Z=active_Z,
+        W_h=W_h,
+        W_v=W_v,
+    )
+
+    if logical_x_cut_col is None or logical_z_cut_row is None:
+        default_col, default_row = choose_default_logical_cuts(active_X, active_Z)
+        if logical_x_cut_col is None:
+            logical_x_cut_col = default_col
+        if logical_z_cut_row is None:
+            logical_z_cut_row = default_row
 
     plain = _contract_with_optional_twists(T, Nkeep=Nkeep, Nsweep=Nsweep)
-    zx = _contract_with_optional_twists(T, twist_x=True, cut_col=logical_x_cut_col, Nkeep=Nkeep, Nsweep=Nsweep)
-    zz = _contract_with_optional_twists(T, twist_z=True, cut_row=logical_z_cut_row,Nkeep=Nkeep, Nsweep=Nsweep)
-    zxz = _contract_with_optional_twists(T, twist_x=True, cut_col=logical_x_cut_col,twist_z=True, cut_row=logical_z_cut_row,Nkeep=Nkeep, Nsweep=Nsweep)
+    zx = _contract_with_optional_twists(
+        T, twist_x=True, cut_col=logical_x_cut_col, Nkeep=Nkeep, Nsweep=Nsweep
+    )
+    zz = _contract_with_optional_twists(
+        T, twist_z=True, cut_row=logical_z_cut_row, Nkeep=Nkeep, Nsweep=Nsweep
+    )
+    zxz = _contract_with_optional_twists(
+        T,
+        twist_x=True,
+        cut_col=logical_x_cut_col,
+        twist_z=True,
+        cut_row=logical_z_cut_row,
+        Nkeep=Nkeep,
+        Nsweep=Nsweep,
+    )
 
     L00 = 0.25 * (plain + zx + zz + zxz)
     L10 = 0.25 * (plain - zx + zz - zxz)
     L01 = 0.25 * (plain + zx - zz - zxz)
     L11 = 0.25 * (plain - zx - zz + zxz)
 
-    out = {
+    return {
         (0, 0): float(np.real_if_close(L00)),
         (1, 0): float(np.real_if_close(L10)),
         (0, 1): float(np.real_if_close(L01)),
         (1, 1): float(np.real_if_close(L11)),
     }
-    
-    return out
 
+
+# Helper functions  
 def total_likelihood_from_cosets(cosets):
     return sum(cosets.values())
 
