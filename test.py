@@ -1,11 +1,15 @@
 
 import numpy as np
+import stim
 import string
 from typing import List, Tuple, Dict, Optional
 from src.functions import * 
 from src.mtimes_MPO import * 
 from src.PEPS import * 
 from src.PEPS_Pauli_decoder import *
+from src.weights_PEPS import * 
+from src.stim_sampler import * 
+from src.stim_PEPS_wrapper import * 
 
 # Generate random open boundary grid for test 
 def make_random_open_boundary_grid(
@@ -309,9 +313,123 @@ def run_peps_decoder_tests():
     test_peps_matches_exact_small()
     print("All PEPS Pauli decoder tests passed.")
 
+
+# Test surface code stim sampler with connection to PEPS decoder 
+def test_peps_tensor_shapes_are_consistent():
+    sample = sample_surface_code_depolarizing(
+        distance=5,
+        p=0.0,
+        memory_basis="x",
+        rounds=3,
+        target_t=1,
+    )
+    nrow, ncol = sample.sX.shape
+    W_h, W_v = depolarizing_weights(nrow, ncol, p=0.0)
+
+    T = build_pauli_peps(
+        sX=sample.sX,
+        sZ=sample.sZ,
+        active_X=sample.active_X,
+        active_Z=sample.active_Z,
+        W_h=W_h,
+        W_v=W_v,
+    )
+
+    assert len(T) == nrow
+    assert all(len(row) == ncol for row in T)
+
+    for r in range(nrow):
+        for c in range(ncol):
+            A = T[r][c]
+            assert A.ndim == 4
+            if r == 0:
+                assert A.shape[1] == 1
+            if r == nrow - 1:
+                assert A.shape[2] == 1
+            if c == 0:
+                assert A.shape[0] == 1
+            if c == ncol - 1:
+                assert A.shape[3] == 1
+            if r < nrow - 1:
+                assert A.shape[2] == T[r + 1][c].shape[1], (
+                    f"vertical mismatch at ({r},{c})"
+                )
+            if c < ncol - 1:
+                assert A.shape[3] == T[r][c + 1].shape[0], (
+                    f"horizontal mismatch at ({r},{c})"
+                )
+                
+def test_no_noise_gives_zero_syndrome():
+    sample = sample_surface_code_depolarizing(distance=5, p=0.0, memory_basis="x")
+    assert np.all(sample.sX == 0), f"sX not zero:\n{sample.sX}"
+    assert np.all(sample.sZ == 0), f"sZ not zero:\n{sample.sZ}"
+
+
+def test_masks_are_binary_and_disjoint():
+    sample = sample_surface_code_depolarizing(distance=5, p=1e-3, memory_basis="x")
+    assert set(np.unique(sample.active_X)).issubset({0, 1})
+    assert set(np.unique(sample.active_Z)).issubset({0, 1})
+    assert np.all((sample.active_X & sample.active_Z) == 0), "X/Z masks overlap."
+
+
+def test_shapes_match_decoder_api():
+    sample = sample_surface_code_depolarizing(distance=5, p=1e-3, memory_basis="x")
+    assert sample.sX.shape == sample.sZ.shape
+    assert sample.active_X.shape == sample.sX.shape
+    assert sample.active_Z.shape == sample.sX.shape
+
+
+def test_masked_decoder_runs_noiseless():
+    sample = sample_surface_code_depolarizing(distance=5, p=0.0, memory_basis="x")
+    nrow, ncol = sample.sX.shape
+    W_h, W_v = depolarizing_weights(nrow, ncol, p=0.0)
+
+    cosets = pauli_coset_likelihoods_peps(
+        sX=sample.sX,
+        sZ=sample.sZ,
+        active_X=sample.active_X,
+        active_Z=sample.active_Z,
+        W_h=W_h,
+        W_v=W_v,
+        Nkeep=64,
+        Nsweep=1,
+    )
+
+    for k, v in cosets.items():
+        assert np.isfinite(v), f"Non-finite coset value for {k}: {v}"
+
+
+def test_one_shot_end_to_end():
+    out = sample_and_decode_surface_code_depolarizing(
+        distance=5,
+        p=1e-3,
+        memory_basis="x",
+        Nkeep=64,
+        Nsweep=1,
+    )
+    assert "sample" in out
+    assert "cosets" in out
+    assert "ml_coset" in out
+    assert len(out["cosets"]) == 4
+    
+def run_sampler_connection_test():
+    test_no_noise_gives_zero_syndrome()
+    test_masks_are_binary_and_disjoint()
+    test_peps_tensor_shapes_are_consistent()
+    test_shapes_match_decoder_api()
+    test_masked_decoder_runs_noiseless()
+    test_one_shot_end_to_end()
+    
+    print("All sampler with Stim tests passed.")
+    
 if __name__=="__main__":
     
     print("Test1 : PEPS contraction ")
     run_finpeps_test() 
     print("Test2 : PEPS Pauli coset likelihood decoder")
     run_peps_decoder_tests()
+    print("Test3 : Surface code - sample syndrome with Stim and conver to input API of PEPS decoder")
+    run_sampler_connection_test() 
+    
+    
+    
