@@ -6,7 +6,11 @@ import numpy as np
 from src.ML_decoder_PEPS.PEPS_Pauli_decoder import decode_batch_with_peps  # type: ignore
 from src.MWPM_decoder_pymatching.mwpm_decoder_2d import decode_2d_surface_batch_with_mwpm
 from src.Surface_code_sampler.stim_sampler import StimSurfaceBatchSample
-from .Surface_code_sampler.surface_code_sampler_full import (
+# from .Surface_code_sampler.surface_code_sampler_full import (
+#     StimSurfaceBatchSampleFullLogical,
+#     sample_surface_code_capacity_batch_full_logical,
+# )
+from src.Surface_code_sampler.surface_code_capacity_sampler_full_logical_v2 import (
     StimSurfaceBatchSampleFullLogical,
     sample_surface_code_capacity_batch_full_logical,
 )
