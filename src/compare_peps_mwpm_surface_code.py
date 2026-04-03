@@ -3,182 +3,122 @@ from typing import Dict, List, Sequence
 
 import numpy as np
 
-from .metric import *
-from .ML_decoder_PEPS.PEPS_Pauli_decoder import decode_batch_with_peps  # type: ignore
-from .MWPM_decoder_pymatching.mwpm_decoder_2d import decode_2d_surface_batch_with_mwpm
-from .Surface_code_sampler.stim_sampler import StimSurfaceBatchSample
-from .Surface_code_sampler.surface_code_capacity_sampler import (
-    sample_surface_code_capacity_batch,
+from src.ML_decoder_PEPS.PEPS_Pauli_decoder import decode_batch_with_peps  # type: ignore
+from src.MWPM_decoder_pymatching.mwpm_decoder_2d import decode_2d_surface_batch_with_mwpm
+from src.Surface_code_sampler.stim_sampler import StimSurfaceBatchSample
+from .Surface_code_sampler.surface_code_sampler_full import (
+    StimSurfaceBatchSampleFullLogical,
+    sample_surface_code_capacity_batch_full_logical,
 )
 
 
+@dataclass
+class LogicalPauliRates:
+    p_I: float
+    p_X: float
+    p_Z: float
+    p_Y: float
 
-# ---------------------------------------------------------------------------
-# Data containers
-# ---------------------------------------------------------------------------
+    @property
+    def logical_failure_rate(self) -> float:
+        return 1.0 - self.p_I
+
+    @property
+    def logical_fidelity(self) -> float:
+        return self.p_I
+
+    @property
+    def average_gate_fidelity(self) -> float:
+        return (1.0 + 2.0 * self.p_I) / 3.0
+
+    @property
+    def logical_x_failure_rate(self) -> float:
+        return self.p_X + self.p_Y
+
+    @property
+    def logical_z_failure_rate(self) -> float:
+        return self.p_Z + self.p_Y
+
+    @property
+    def x_basis_memory_fidelity(self) -> float:
+        return self.p_I + self.p_X
+
+    @property
+    def z_basis_memory_fidelity(self) -> float:
+        return self.p_I + self.p_Z
+
 
 @dataclass
-class DecoderBasisComparisonPoint:
+class DecoderFullLogicalComparisonPoint:
     p: float
     shots: int
-    memory_basis: str
-    peps_failure_rate: float
-    peps_memory_fidelity: float
-    mwpm_failure_rate: float
-    mwpm_memory_fidelity: float
-    peps_num_failures: int
-    mwpm_num_failures: int
-    peps_predicted_observable_flips: np.ndarray
-    mwpm_predicted_observable_flips: np.ndarray
-    decoder_agreement_rate: float
-
-    @property
-    def delta_failure_rate(self) -> float:
-        return self.peps_failure_rate - self.mwpm_failure_rate
-
-    @property
-    def delta_memory_fidelity(self) -> float:
-        return self.peps_memory_fidelity - self.mwpm_memory_fidelity
+    peps_rates: LogicalPauliRates
+    mwpm_rates: LogicalPauliRates
+    peps_predicted_logical_bits: np.ndarray
+    mwpm_predicted_logical_bits: np.ndarray
+    true_logical_bits: np.ndarray
+    peps_decoder_agreement_rate_between_bases: float
+    mwpm_decoder_agreement_rate_between_bases: float
+    peps_vs_mwpm_agreement_rate: float
 
 
 @dataclass
-class DecoderBasisComparisonTable:
+class DecoderFullLogicalComparisonTable:
     distance: int
     rounds: int
     noisy_round: int
     target_t: int
     shots: int
-    memory_basis: str
-    points: List[DecoderBasisComparisonPoint]
+    points: List[DecoderFullLogicalComparisonPoint]
 
     def as_dicts(self) -> List[Dict[str, float]]:
-        return [
-            {
-                "p": pt.p,
-                "shots": pt.shots,
-                "memory_basis": pt.memory_basis,
-                "peps_failure_rate": pt.peps_failure_rate,
-                "peps_memory_fidelity": pt.peps_memory_fidelity,
-                "mwpm_failure_rate": pt.mwpm_failure_rate,
-                "mwpm_memory_fidelity": pt.mwpm_memory_fidelity,
-                "peps_num_failures": pt.peps_num_failures,
-                "mwpm_num_failures": pt.mwpm_num_failures,
-                "decoder_agreement_rate": pt.decoder_agreement_rate,
-                "delta_failure_rate": pt.delta_failure_rate,
-                "delta_memory_fidelity": pt.delta_memory_fidelity,
-            }
-            for pt in self.points
-        ]
-
-    def pretty_print(self) -> None:
-        header = (
-            "      p | shots | basis |  PEPS fail |  MWPM fail | "
-            " PEPS fid | MWPM fid | agree"
-        )
-        print(header)
-        print("-" * len(header))
+        out: List[Dict[str, float]] = []
         for pt in self.points:
-            print(
-                f"{pt.p:8.5g} | {pt.shots:5d} | {pt.memory_basis:>5s} | "
-                f"{pt.peps_failure_rate:10.6f} | {pt.mwpm_failure_rate:10.6f} | "
-                f"{pt.peps_memory_fidelity:9.6f} | {pt.mwpm_memory_fidelity:9.6f} | "
-                f"{pt.decoder_agreement_rate:5.3f}"
+            out.append(
+                {
+                    "p": pt.p,
+                    "shots": pt.shots,
+                    "peps_p_I": pt.peps_rates.p_I,
+                    "peps_p_X": pt.peps_rates.p_X,
+                    "peps_p_Z": pt.peps_rates.p_Z,
+                    "peps_p_Y": pt.peps_rates.p_Y,
+                    "peps_logical_failure_rate": pt.peps_rates.logical_failure_rate,
+                    "peps_logical_fidelity": pt.peps_rates.logical_fidelity,
+                    "peps_average_gate_fidelity": pt.peps_rates.average_gate_fidelity,
+                    "peps_logical_x_failure_rate": pt.peps_rates.logical_x_failure_rate,
+                    "peps_logical_z_failure_rate": pt.peps_rates.logical_z_failure_rate,
+                    "mwpm_p_I": pt.mwpm_rates.p_I,
+                    "mwpm_p_X": pt.mwpm_rates.p_X,
+                    "mwpm_p_Z": pt.mwpm_rates.p_Z,
+                    "mwpm_p_Y": pt.mwpm_rates.p_Y,
+                    "mwpm_logical_failure_rate": pt.mwpm_rates.logical_failure_rate,
+                    "mwpm_logical_fidelity": pt.mwpm_rates.logical_fidelity,
+                    "mwpm_average_gate_fidelity": pt.mwpm_rates.average_gate_fidelity,
+                    "mwpm_logical_x_failure_rate": pt.mwpm_rates.logical_x_failure_rate,
+                    "mwpm_logical_z_failure_rate": pt.mwpm_rates.logical_z_failure_rate,
+                    "peps_vs_mwpm_agreement_rate": pt.peps_vs_mwpm_agreement_rate,
+                }
             )
-
-
-@dataclass
-class DecoderCombinedComparisonPoint:
-    p: float
-    shots: int
-
-    # Basis-conditioned memory quantities.
-    peps_x_basis_memory_failure_rate: float
-    peps_x_basis_memory_fidelity: float
-    peps_z_basis_memory_failure_rate: float
-    peps_z_basis_memory_fidelity: float
-    mwpm_x_basis_memory_failure_rate: float
-    mwpm_x_basis_memory_fidelity: float
-    mwpm_z_basis_memory_failure_rate: float
-    mwpm_z_basis_memory_fidelity: float
-
-    # Logical-type failure rates inferred from basis-conditioned experiments.
-    # memory_basis='z' probes logical X failure.
-    peps_logical_x_failure_rate: float
-    mwpm_logical_x_failure_rate: float
-    # memory_basis='x' probes logical Z failure.
-    peps_logical_z_failure_rate: float
-    mwpm_logical_z_failure_rate: float
-
-    # Aggregate summary from the two basis-conditioned memory fidelities.
-    peps_average_memory_fidelity: float
-    mwpm_average_memory_fidelity: float
-
-    # Decoder agreement rates within each basis.
-    x_basis_decoder_agreement_rate: float
-    z_basis_decoder_agreement_rate: float
-
-    @property
-    def peps_average_failure_rate(self) -> float:
-        return 1.0 - self.peps_average_memory_fidelity
-
-    @property
-    def mwpm_average_failure_rate(self) -> float:
-        return 1.0 - self.mwpm_average_memory_fidelity
-
-
-@dataclass
-class DecoderCombinedComparisonTable:
-    distance: int
-    rounds: int
-    noisy_round: int
-    target_t: int
-    shots: int
-    x_basis_table: DecoderBasisComparisonTable
-    z_basis_table: DecoderBasisComparisonTable
-    points: List[DecoderCombinedComparisonPoint]
-
-    def as_dicts(self) -> List[Dict[str, float]]:
-        return [
-            {
-                "p": pt.p,
-                "shots": pt.shots,
-                "peps_logical_x_failure_rate": pt.peps_logical_x_failure_rate,
-                "mwpm_logical_x_failure_rate": pt.mwpm_logical_x_failure_rate,
-                "peps_logical_z_failure_rate": pt.peps_logical_z_failure_rate,
-                "mwpm_logical_z_failure_rate": pt.mwpm_logical_z_failure_rate,
-                "peps_x_basis_memory_fidelity": pt.peps_x_basis_memory_fidelity,
-                "mwpm_x_basis_memory_fidelity": pt.mwpm_x_basis_memory_fidelity,
-                "peps_z_basis_memory_fidelity": pt.peps_z_basis_memory_fidelity,
-                "mwpm_z_basis_memory_fidelity": pt.mwpm_z_basis_memory_fidelity,
-                "peps_average_memory_fidelity": pt.peps_average_memory_fidelity,
-                "mwpm_average_memory_fidelity": pt.mwpm_average_memory_fidelity,
-                "x_basis_decoder_agreement_rate": pt.x_basis_decoder_agreement_rate,
-                "z_basis_decoder_agreement_rate": pt.z_basis_decoder_agreement_rate,
-            }
-            for pt in self.points
-        ]
+        return out
 
     def pretty_print(self) -> None:
         header = (
-            "      p | PEPS LX fail | MWPM LX fail | PEPS LZ fail | MWPM LZ fail | "
-            "PEPS avg fid | MWPM avg fid"
+            "      p | PEPS pI | MWPM pI | PEPS fail | MWPM fail | PEPS Favg | MWPM Favg"
         )
         print(header)
         print("-" * len(header))
         for pt in self.points:
             print(
-                f"{pt.p:8.5g} | {pt.peps_logical_x_failure_rate:12.6f} | "
-                f"{pt.mwpm_logical_x_failure_rate:12.6f} | "
-                f"{pt.peps_logical_z_failure_rate:12.6f} | "
-                f"{pt.mwpm_logical_z_failure_rate:12.6f} | "
-                f"{pt.peps_average_memory_fidelity:12.6f} | "
-                f"{pt.mwpm_average_memory_fidelity:12.6f}"
+                f"{pt.p:8.5g} | {pt.peps_rates.p_I:7.4f} | {pt.mwpm_rates.p_I:7.4f} | "
+                f"{pt.peps_rates.logical_failure_rate:9.4f} | {pt.mwpm_rates.logical_failure_rate:9.4f} | "
+                f"{pt.peps_rates.average_gate_fidelity:10.6f} | {pt.mwpm_rates.average_gate_fidelity:10.6f}"
             )
 
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _validate_probability_grid(p_values: Sequence[float]) -> List[float]:
     if len(p_values) == 0:
@@ -190,255 +130,178 @@ def _validate_probability_grid(p_values: Sequence[float]) -> List[float]:
     return out
 
 
-def _ensure_batch(batch: StimSurfaceBatchSample, shots: int) -> None:
-    if batch.shots != shots:
-        raise ValueError(f"Expected batch.shots={shots}, got {batch.shots}.")
-    if batch.observable_flips.ndim != 2:
-        raise ValueError(
-            "Expected batch.observable_flips to have shape (shots, num_obs)."
-        )
-
-
-def _compare_on_existing_batch(
+def _clone_batch_with_one_observable(
     batch: StimSurfaceBatchSample,
+    observable_flips: np.ndarray,
+) -> StimSurfaceBatchSample:
+    obs = np.asarray(observable_flips, dtype=np.uint8)
+    if obs.ndim != 2 or obs.shape[1] != 1:
+        raise ValueError("observable_flips must have shape (shots, 1).")
+    if obs.shape[0] != batch.shots:
+        raise ValueError("observable_flips must have the same number of shots as batch.")
+    return StimSurfaceBatchSample(
+        circuit=batch.circuit,
+        detector_bits=batch.detector_bits,
+        observable_flips=obs,
+        sX=batch.sX,
+        sZ=batch.sZ,
+        active_X=batch.active_X,
+        active_Z=batch.active_Z,
+        detector_coords=batch.detector_coords,
+    )
+
+
+def _logical_rates_from_residual_bits(residual_bits: np.ndarray) -> LogicalPauliRates:
+    residual_bits = np.asarray(residual_bits, dtype=np.uint8)
+    if residual_bits.ndim != 2 or residual_bits.shape[1] != 2:
+        raise ValueError("residual_bits must have shape (shots, 2) with columns (z_log, x_log).")
+    shots = residual_bits.shape[0]
+    if shots == 0:
+        return LogicalPauliRates(0.0, 0.0, 0.0, 0.0)
+
+    z = residual_bits[:, 0]
+    x = residual_bits[:, 1]
+    p_I = float(np.mean((z == 0) & (x == 0)))
+    p_Z = float(np.mean((z == 1) & (x == 0)))
+    p_X = float(np.mean((z == 0) & (x == 1)))
+    p_Y = float(np.mean((z == 1) & (x == 1)))
+    return LogicalPauliRates(p_I=p_I, p_X=p_X, p_Z=p_Z, p_Y=p_Y)
+
+
+
+def _predict_peps_logical_bits(
+    data: StimSurfaceBatchSampleFullLogical,
     *,
     p: float,
-    memory_basis: str,
     peps_nkeep: int,
     peps_nsweep: int,
     peps_debug_failures: bool = False,
-) -> DecoderBasisComparisonPoint:
-    peps_out = decode_batch_with_peps(
-        batch=batch,
+) -> np.ndarray:
+    # X-basis memory returns the logical Z bit.
+    batch_x = _clone_batch_with_one_observable(
+        data.batch_x,
+        data.batch_x.observable_flips,
+    )
+    out_x = decode_batch_with_peps(
+        batch=batch_x,
         p=p,
-        memory_basis=memory_basis,
+        memory_basis="x",
         Nkeep=peps_nkeep,
         Nsweep=peps_nsweep,
         debug_failures=peps_debug_failures,
     )
-    mwpm_out = decode_2d_surface_batch_with_mwpm(
-        batch=batch,
+
+    # Z-basis memory returns the logical X bit.
+    batch_z = _clone_batch_with_one_observable(
+        data.batch_z,
+        data.batch_z.observable_flips,
+    )
+    out_z = decode_batch_with_peps(
+        batch=batch_z,
         p=p,
-        memory_basis=memory_basis,
+        memory_basis="z",
+        Nkeep=peps_nkeep,
+        Nsweep=peps_nsweep,
+        debug_failures=peps_debug_failures,
     )
 
-    peps_pred = np.asarray(peps_out.predicted_observable_flips, dtype=np.uint8)
-    mwpm_pred = np.asarray(mwpm_out.predicted_observable_flips, dtype=np.uint8)
-    actual = np.asarray(batch.observable_flips, dtype=np.uint8)
+    z_log = np.asarray(out_x.predicted_observable_flips, dtype=np.uint8).reshape(-1, 1)
+    x_log = np.asarray(out_z.predicted_observable_flips, dtype=np.uint8).reshape(-1, 1)
+    return np.concatenate([z_log, x_log], axis=1)
 
-    return DecoderBasisComparisonPoint(
-        p=float(p),
-        shots=int(batch.shots),
-        memory_basis=str(memory_basis),
-        peps_failure_rate=float(peps_out.logical_error_rate),
-        peps_memory_fidelity=float(
-            logical_fidelity_from_predictions(actual, peps_pred)
-        ),
-        mwpm_failure_rate=float(mwpm_out.logical_error_rate),
-        mwpm_memory_fidelity=float(
-            logical_fidelity_from_predictions(actual, mwpm_pred)
-        ),
-        peps_num_failures=int(np.sum(peps_out.logical_failures)),
-        mwpm_num_failures=int(np.sum(mwpm_out.logical_failures)),
-        peps_predicted_observable_flips=peps_pred,
-        mwpm_predicted_observable_flips=mwpm_pred,
-        decoder_agreement_rate=float(np.mean(np.all(peps_pred == mwpm_pred, axis=1))),
+
+
+def _predict_mwpm_logical_bits(
+    data: StimSurfaceBatchSampleFullLogical,
+    *,
+    p: float,
+) -> np.ndarray:
+    out_x = decode_2d_surface_batch_with_mwpm(
+        batch=_clone_batch_with_one_observable(data.batch_x, data.batch_x.observable_flips),
+        p=p,
+        memory_basis="x",
     )
-
-
-def _validate_capacity_alignment(rounds: int, noisy_round: int, target_t: int) -> None:
-    if rounds < 3:
-        raise ValueError("rounds must be >= 3.")
-    if not (1 <= noisy_round <= rounds):
-        raise ValueError("noisy_round must satisfy 1 <= noisy_round <= rounds.")
-    if target_t != noisy_round - 1:
-        raise ValueError(
-            "For the single-round capacity sampler, use target_t = noisy_round - 1 "
-            "so the decoded detector slice matches the unique noisy data round."
-        )
+    out_z = decode_2d_surface_batch_with_mwpm(
+        batch=_clone_batch_with_one_observable(data.batch_z, data.batch_z.observable_flips),
+        p=p,
+        memory_basis="z",
+    )
+    z_log = np.asarray(out_x.predicted_observable_flips, dtype=np.uint8).reshape(-1, 1)
+    x_log = np.asarray(out_z.predicted_observable_flips, dtype=np.uint8).reshape(-1, 1)
+    return np.concatenate([z_log, x_log], axis=1)
 
 
 # ---------------------------------------------------------------------------
-# Public comparison API
+# Public API
 # ---------------------------------------------------------------------------
 
-def compare_peps_mwpm_surface_code_basis(
+
+def compare_peps_mwpm_surface_code_full_logical(
     *,
     distance: int,
     p_values: Sequence[float],
     shots: int,
-    memory_basis: str = "x",
     rounds: int = 3,
     noisy_round: int = 2,
     target_t: int = 1,
     peps_nkeep: int = 128,
     peps_nsweep: int = 1,
     peps_debug_failures: bool = False,
-) -> DecoderBasisComparisonTable:
-    """
-    Compare PEPS ML and 2D MWPM on the same surface-code capacity batches for
-    one chosen memory basis.
-
-    Interpretation:
-      - memory_basis='x' probes logical Z-type failure / X-basis memory fidelity.
-      - memory_basis='z' probes logical X-type failure / Z-basis memory fidelity.
-    """
-    if distance < 2:
-        raise ValueError("distance must be at least 2.")
-    if shots <= 0:
-        raise ValueError("shots must be a positive integer.")
-    if memory_basis not in ("x", "z"):
-        raise ValueError("memory_basis must be 'x' or 'z'.")
-
-    _validate_capacity_alignment(rounds, noisy_round, target_t)
+    seed: int | None = None,
+) -> DecoderFullLogicalComparisonTable:
     p_grid = _validate_probability_grid(p_values)
+    points: List[DecoderFullLogicalComparisonPoint] = []
 
-    points: List[DecoderBasisComparisonPoint] = []
-    for p in p_grid:
-        batch = sample_surface_code_capacity_batch(
+    # Keep a reproducible but p-dependent RNG stream.
+    seed_seq = np.random.SeedSequence(seed)
+    child_seeds = seed_seq.spawn(len(p_grid))
+
+    for p, child_seed in zip(p_grid, child_seeds):
+        data = sample_surface_code_capacity_batch_full_logical(
             distance=distance,
             p=p,
             shots=shots,
-            memory_basis=memory_basis,
             rounds=rounds,
             noisy_round=noisy_round,
             target_t=target_t,
+            seed=int(child_seed.generate_state(1)[0]),
         )
-        _ensure_batch(batch, shots)
+        true_bits = np.asarray(data.logical_bits, dtype=np.uint8)
+
+        peps_pred = _predict_peps_logical_bits(
+            data,
+            p=p,
+            peps_nkeep=peps_nkeep,
+            peps_nsweep=peps_nsweep,
+            peps_debug_failures=peps_debug_failures,
+        )
+        mwpm_pred = _predict_mwpm_logical_bits(data, p=p)
+
+        peps_residual = np.bitwise_xor(true_bits, peps_pred)
+        mwpm_residual = np.bitwise_xor(true_bits, mwpm_pred)
+
         points.append(
-            _compare_on_existing_batch(
-                batch=batch,
-                p=p,
-                memory_basis=memory_basis,
-                peps_nkeep=peps_nkeep,
-                peps_nsweep=peps_nsweep,
-                peps_debug_failures=peps_debug_failures,
+            DecoderFullLogicalComparisonPoint(
+                p=float(p),
+                shots=shots,
+                peps_rates=_logical_rates_from_residual_bits(peps_residual),
+                mwpm_rates=_logical_rates_from_residual_bits(mwpm_residual),
+                peps_predicted_logical_bits=peps_pred,
+                mwpm_predicted_logical_bits=mwpm_pred,
+                true_logical_bits=true_bits,
+                peps_decoder_agreement_rate_between_bases=1.0,  # placeholder; two-bit reconstruction already combined.
+                mwpm_decoder_agreement_rate_between_bases=1.0,
+                peps_vs_mwpm_agreement_rate=float(np.mean(np.all(peps_pred == mwpm_pred, axis=1))),
             )
         )
 
-    return DecoderBasisComparisonTable(
+    return DecoderFullLogicalComparisonTable(
         distance=distance,
         rounds=rounds,
         noisy_round=noisy_round,
         target_t=target_t,
         shots=shots,
-        memory_basis=memory_basis,
         points=points,
-    )
-
-
-def compare_peps_mwpm_surface_code(
-    *,
-    distance: int,
-    p_values: Sequence[float],
-    shots: int,
-    rounds: int = 3,
-    noisy_round: int = 2,
-    target_t: int = 1,
-    peps_nkeep: int = 128,
-    peps_nsweep: int = 1,
-    peps_debug_failures: bool = False,
-) -> DecoderCombinedComparisonTable:
-    """
-    Run both memory bases and return separate logical-X / logical-Z failure curves.
-
-    Important:
-    This current workflow still exposes one logical observable per basis, not the
-    full two-bit logical Pauli class (I, X, Z, Y). Therefore:
-      - logical X failure rate is inferred from memory_basis='z',
-      - logical Z failure rate is inferred from memory_basis='x',
-      - average_memory_fidelity is the mean of the X-basis and Z-basis memory
-        fidelities, not the full logical average gate fidelity of the residual
-        logical Pauli channel.
-    """
-    x_basis_table = compare_peps_mwpm_surface_code_basis(
-        distance=distance,
-        p_values=p_values,
-        shots=shots,
-        memory_basis="x",
-        rounds=rounds,
-        noisy_round=noisy_round,
-        target_t=target_t,
-        peps_nkeep=peps_nkeep,
-        peps_nsweep=peps_nsweep,
-        peps_debug_failures=peps_debug_failures,
-    )
-    z_basis_table = compare_peps_mwpm_surface_code_basis(
-        distance=distance,
-        p_values=p_values,
-        shots=shots,
-        memory_basis="z",
-        rounds=rounds,
-        noisy_round=noisy_round,
-        target_t=target_t,
-        peps_nkeep=peps_nkeep,
-        peps_nsweep=peps_nsweep,
-        peps_debug_failures=peps_debug_failures,
-    )
-
-    if len(x_basis_table.points) != len(z_basis_table.points):
-        raise RuntimeError("Expected x/z basis tables to have the same length.")
-
-    points: List[DecoderCombinedComparisonPoint] = []
-    for x_pt, z_pt in zip(x_basis_table.points, z_basis_table.points):
-        if not np.isclose(x_pt.p, z_pt.p):
-            raise RuntimeError("Expected matching p values between x/z basis runs.")
-
-        points.append(
-            DecoderCombinedComparisonPoint(
-                p=float(x_pt.p),
-                shots=int(x_pt.shots),
-                peps_x_basis_memory_failure_rate=float(x_pt.peps_failure_rate),
-                peps_x_basis_memory_fidelity=float(x_pt.peps_memory_fidelity),
-                peps_z_basis_memory_failure_rate=float(z_pt.peps_failure_rate),
-                peps_z_basis_memory_fidelity=float(z_pt.peps_memory_fidelity),
-                mwpm_x_basis_memory_failure_rate=float(x_pt.mwpm_failure_rate),
-                mwpm_x_basis_memory_fidelity=float(x_pt.mwpm_memory_fidelity),
-                mwpm_z_basis_memory_failure_rate=float(z_pt.mwpm_failure_rate),
-                mwpm_z_basis_memory_fidelity=float(z_pt.mwpm_memory_fidelity),
-                peps_logical_x_failure_rate=float(z_pt.peps_failure_rate),
-                mwpm_logical_x_failure_rate=float(z_pt.mwpm_failure_rate),
-                peps_logical_z_failure_rate=float(x_pt.peps_failure_rate),
-                mwpm_logical_z_failure_rate=float(x_pt.mwpm_failure_rate),
-                peps_average_memory_fidelity=float(
-                    0.5 * (x_pt.peps_memory_fidelity + z_pt.peps_memory_fidelity)
-                ),
-                mwpm_average_memory_fidelity=float(
-                    0.5 * (x_pt.mwpm_memory_fidelity + z_pt.mwpm_memory_fidelity)
-                ),
-                x_basis_decoder_agreement_rate=float(x_pt.decoder_agreement_rate),
-                z_basis_decoder_agreement_rate=float(z_pt.decoder_agreement_rate),
-            )
-        )
-
-    return DecoderCombinedComparisonTable(
-        distance=distance,
-        rounds=rounds,
-        noisy_round=noisy_round,
-        target_t=target_t,
-        shots=shots,
-        x_basis_table=x_basis_table,
-        z_basis_table=z_basis_table,
-        points=points,
-    )
-
-
-def compare_peps_mwpm_on_one_batch(
-    *,
-    batch: StimSurfaceBatchSample,
-    p: float,
-    memory_basis: str,
-    peps_nkeep: int = 128,
-    peps_nsweep: int = 1,
-    peps_debug_failures: bool = False,
-) -> DecoderBasisComparisonPoint:
-    return _compare_on_existing_batch(
-        batch=batch,
-        p=p,
-        memory_basis=memory_basis,
-        peps_nkeep=peps_nkeep,
-        peps_nsweep=peps_nsweep,
-        peps_debug_failures=peps_debug_failures,
     )
 
 
@@ -447,107 +310,47 @@ def compare_peps_mwpm_on_one_batch(
 # ---------------------------------------------------------------------------
 
 
-def test_compare_peps_mwpm_surface_code_basis_shapes() -> None:
-    table = compare_peps_mwpm_surface_code_basis(
+def test_logical_rates_from_residual_bits() -> None:
+    residual = np.array(
+        [
+            [0, 0],
+            [1, 0],
+            [0, 1],
+            [1, 1],
+        ],
+        dtype=np.uint8,
+    )
+    rates = _logical_rates_from_residual_bits(residual)
+    assert abs(rates.p_I - 0.25) < 1e-12
+    assert abs(rates.p_Z - 0.25) < 1e-12
+    assert abs(rates.p_X - 0.25) < 1e-12
+    assert abs(rates.p_Y - 0.25) < 1e-12
+    assert abs(rates.logical_failure_rate - 0.75) < 1e-12
+    assert abs(rates.average_gate_fidelity - 0.5) < 1e-12
+
+
+
+def test_clone_batch_with_one_observable_shape() -> None:
+    data = sample_surface_code_capacity_batch_full_logical(
         distance=3,
-        p_values=[1e-4, 5e-4],
-        shots=4,
-        memory_basis="x",
+        p=0.0,
+        shots=2,
         rounds=3,
         noisy_round=2,
         target_t=1,
-        peps_nkeep=32,
-        peps_nsweep=0,
+        seed=11,
     )
-    assert len(table.points) == 2
-    for pt in table.points:
-        assert pt.peps_predicted_observable_flips.shape == (4, 1)
-        assert pt.mwpm_predicted_observable_flips.shape == (4, 1)
-        assert 0.0 <= pt.peps_failure_rate <= 1.0
-        assert 0.0 <= pt.mwpm_failure_rate <= 1.0
-        assert np.isclose(pt.peps_memory_fidelity, 1.0 - pt.peps_failure_rate, atol=1e-12)
-        assert np.isclose(pt.mwpm_memory_fidelity, 1.0 - pt.mwpm_failure_rate, atol=1e-12)
-    print("test_compare_peps_mwpm_surface_code_basis_shapes passed.")
+    cloned = _clone_batch_with_one_observable(data.batch_x, data.batch_x.observable_flips)
+    assert cloned.observable_flips.shape == (2, 1)
+    assert cloned.sX.shape[0] == 2
 
 
-def test_compare_peps_mwpm_on_existing_batch() -> None:
-    batch = sample_surface_code_capacity_batch(
-        distance=3,
-        p=1e-3,
-        shots=5,
-        memory_basis="x",
-        rounds=3,
-        noisy_round=2,
-        target_t=1,
-    )
-    result = compare_peps_mwpm_on_one_batch(
-        batch=batch,
-        p=1e-3,
-        memory_basis="x",
-        peps_nkeep=32,
-        peps_nsweep=0,
-    )
-    assert result.shots == batch.shots
-    assert result.peps_predicted_observable_flips.shape == batch.observable_flips.shape
-    assert result.mwpm_predicted_observable_flips.shape == batch.observable_flips.shape
-    print("test_compare_peps_mwpm_on_existing_batch passed.")
 
-
-def test_compare_peps_mwpm_surface_code_combined() -> None:
-    table = compare_peps_mwpm_surface_code(
-        distance=3,
-        p_values=[1e-4],
-        shots=3,
-        rounds=3,
-        noisy_round=2,
-        target_t=1,
-        peps_nkeep=32,
-        peps_nsweep=0,
-    )
-    assert len(table.points) == 1
-    pt = table.points[0]
-    assert 0.0 <= pt.peps_logical_x_failure_rate <= 1.0
-    assert 0.0 <= pt.peps_logical_z_failure_rate <= 1.0
-    assert 0.0 <= pt.mwpm_logical_x_failure_rate <= 1.0
-    assert 0.0 <= pt.mwpm_logical_z_failure_rate <= 1.0
-    assert 0.0 <= pt.peps_average_memory_fidelity <= 1.0
-    assert 0.0 <= pt.mwpm_average_memory_fidelity <= 1.0
-    print("test_compare_peps_mwpm_surface_code_combined passed.")
-
-
-def run_compare_peps_mwpm_surface_code_tests() -> None:
-    test_compare_peps_mwpm_surface_code_basis_shapes()
-    test_compare_peps_mwpm_on_existing_batch()
-    test_compare_peps_mwpm_surface_code_combined()
-    print("All compare_peps_mwpm_surface_code_updated tests passed.")
+def run_compare_peps_mwpm_surface_code_full_logical_tests() -> None:
+    test_logical_rates_from_residual_bits()
+    test_clone_batch_with_one_observable_shape()
+    print("Lightweight full-logical comparison tests passed.")
 
 
 if __name__ == "__main__":
-    run_compare_peps_mwpm_surface_code_tests()
-
-    print("\nX-basis table (probes logical Z-type failure):")
-    x_table = compare_peps_mwpm_surface_code_basis(
-        distance=3,
-        p_values=[1e-4, 5e-4, 1e-3],
-        shots=20,
-        memory_basis="x",
-        rounds=3,
-        noisy_round=2,
-        target_t=1,
-        peps_nkeep=64,
-        peps_nsweep=1,
-    )
-    x_table.pretty_print()
-
-    print("\nCombined x/z-basis summary:")
-    combined = compare_peps_mwpm_surface_code(
-        distance=3,
-        p_values=[1e-4, 5e-4, 1e-3],
-        shots=20,
-        rounds=3,
-        noisy_round=2,
-        target_t=1,
-        peps_nkeep=64,
-        peps_nsweep=1,
-    )
-    combined.pretty_print()
+    run_compare_peps_mwpm_surface_code_full_logical_tests()
