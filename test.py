@@ -10,6 +10,7 @@ from src.PEPS_Pauli_decoder import *
 from src.weights_PEPS import * 
 from src.stim_sampler import * 
 from src.stim_PEPS_wrapper import * 
+from src.mwpm_decoder import *
 
 # Generate random open boundary grid for test 
 def make_random_open_boundary_grid(
@@ -422,14 +423,211 @@ def run_sampler_connection_test():
     
     print("All sampler with Stim tests passed.")
     
+    
+def test_batch_shapes() -> None:
+    batch = sample_surface_code_depolarizing_batch(
+        distance=5,
+        p=1e-3,
+        shots=8,
+        memory_basis="x",
+        rounds=3,
+        target_t=1,
+    )
+    assert batch.detector_bits.ndim == 2
+    assert batch.observable_flips.ndim == 2
+    assert batch.sX.ndim == 3
+    assert batch.sZ.ndim == 3
+    assert batch.active_X.shape == batch.sX.shape
+    assert batch.active_Z.shape == batch.sZ.shape
+    assert batch.shots == 8
+
+
+def test_single_shot_wrapper_matches_batch() -> None:
+    batch = sample_surface_code_depolarizing_batch(
+        distance=5,
+        p=1e-3,
+        shots=1,
+        memory_basis="x",
+        rounds=3,
+        target_t=1,
+    )
+    shot = batch.get_shot(0)
+    assert shot.detector_bits.ndim == 1
+    assert shot.observable_flips.ndim == 1
+    assert shot.sX.ndim == 2
+    assert shot.sZ.ndim == 2
+
+
+def run_sampler_batch_tests() -> None:
+    test_batch_shapes()
+    test_single_shot_wrapper_matches_batch()
+    print("All stim_sampler batch tests passed.")
+    
+def test_mwpm_decodes_one_stim_surface_sample() -> None:
+    sample = sample_surface_code_depolarizing(
+        distance=5,
+        p=1e-3,
+        memory_basis="x",
+        rounds=3,
+        target_t=1,
+    )
+    out = decode_stim_surface_sample_with_mwpm(sample)
+
+    assert out.predicted_observable_flips.shape == sample.observable_flips.shape
+    assert out.predicted_observable_flips.dtype == np.uint8
+    
+
+def test_mwpm_decodes_stim_surface_batch(shots: int = 32) -> None:
+    batch = sample_surface_code_depolarizing_batch(
+        distance=5,
+        p=1e-3,
+        shots=shots,
+        memory_basis="x",
+        rounds=3,
+        target_t=1,
+    )
+    out = decode_stim_surface_batch_with_mwpm(batch)
+
+    assert out.detector_bits.shape[0] == shots
+    assert out.actual_observable_flips.shape[0] == shots
+    assert out.predicted_observable_flips.shape == out.actual_observable_flips.shape
+    assert out.logical_failures.shape == (shots,)
+    
+
+def test_zero_noise_stim_surface_sample() -> None:
+    sample = sample_surface_code_depolarizing(
+        distance=5,
+        p=0.0,
+        memory_basis="x",
+        rounds=3,
+        target_t=1,
+    )
+    out = decode_stim_surface_sample_with_mwpm(sample)
+
+    assert np.all(sample.observable_flips == 0), (
+        f"Observable flips should be zero at p=0, got {sample.observable_flips}"
+    )
+    assert not out.logical_failure
+   
+
+def test_zero_noise_stim_surface_batch(shots: int = 64) -> None:
+    batch = sample_surface_code_depolarizing_batch(
+        distance=5,
+        p=0.0,
+        shots=shots,
+        memory_basis="x",
+        rounds=3,
+        target_t=1,
+    )
+    out = decode_stim_surface_batch_with_mwpm(batch)
+
+    assert out.logical_error_rate == 0.0
+    
+
+def test_same_sample_can_be_used_for_peps_and_mwpm() -> None:
+    sample = sample_surface_code_depolarizing(
+        distance=5,
+        p=1e-3,
+        memory_basis="x",
+        rounds=3,
+        target_t=1,
+    )
+    out = decode_stim_surface_sample_with_mwpm(sample)
+
+    assert sample.sX.shape == sample.sZ.shape
+    assert sample.active_X.shape == sample.sX.shape
+    assert sample.active_Z.shape == sample.sX.shape
+    assert sample.detector_bits.ndim == 1
+    assert sample.observable_flips.ndim == 1
+    assert out.predicted_observable_flips.shape == sample.observable_flips.shape
+    
+
+def test_same_batch_can_be_used_for_peps_and_mwpm(shots: int = 16) -> None:
+    batch = sample_surface_code_depolarizing_batch(
+        distance=5,
+        p=1e-3,
+        shots=shots,
+        memory_basis="x",
+        rounds=3,
+        target_t=1,
+    )
+    out = decode_stim_surface_batch_with_mwpm(batch)
+
+    assert batch.sX.ndim == 3
+    assert batch.sZ.ndim == 3
+    assert batch.active_X.shape == batch.sX.shape
+    assert batch.active_Z.shape == batch.sZ.shape
+    assert batch.detector_bits.ndim == 2
+    assert batch.observable_flips.ndim == 2
+    assert out.predicted_observable_flips.shape == batch.observable_flips.shape
+
+
+def test_batch_mwpm_surface_code_same_circuit_factory(shots: int = 128) -> None:
+    result = run_surface_code_mwpm_batch(
+        distance=5,
+        p=1e-3,
+        shots=shots,
+        memory_basis="x",
+        rounds=3,
+        target_t=1,
+    )
+
+    assert result.detector_bits.shape[0] == shots
+    assert result.actual_observable_flips.shape[0] == shots
+    assert result.predicted_observable_flips.shape == result.actual_observable_flips.shape
+
+
+def test_noise_trend_surface_code_same_sampler(
+    shots: int = 2000,
+    p_low: float = 5e-4,
+    p_high: float = 2e-2,
+) -> None:
+    low = run_surface_code_mwpm_batch(
+        distance=5,
+        p=p_low,
+        shots=shots,
+        memory_basis="x",
+        rounds=3,
+        target_t=1,
+    )
+    high = run_surface_code_mwpm_batch(
+        distance=5,
+        p=p_high,
+        shots=shots,
+        memory_basis="x",
+        rounds=3,
+        target_t=1,
+    )
+
+    assert high.logical_error_rate >= low.logical_error_rate
+    
+
+def run_MWPM_decoder_tests() -> None:
+    test_mwpm_decodes_one_stim_surface_sample()
+    test_mwpm_decodes_stim_surface_batch()
+    test_zero_noise_stim_surface_sample()
+    test_zero_noise_stim_surface_batch()
+    test_same_sample_can_be_used_for_peps_and_mwpm()
+    test_same_batch_can_be_used_for_peps_and_mwpm()
+    test_batch_mwpm_surface_code_same_circuit_factory()
+    test_noise_trend_surface_code_same_sampler()
+    print("All MWPM tests using StimSurfaceSample / StimSurfaceBatchSample passed.")
+
+
+    
+
 if __name__=="__main__":
     
-    print("Test1 : PEPS contraction ")
-    run_finpeps_test() 
-    print("Test2 : PEPS Pauli coset likelihood decoder")
-    run_peps_decoder_tests()
-    print("Test3 : Surface code - sample syndrome with Stim and conver to input API of PEPS decoder")
-    run_sampler_connection_test() 
+    # print("Test1 : PEPS contraction ")
+    # run_finpeps_test() 
+    # print("Test2 : PEPS Pauli coset likelihood decoder")
+    # run_peps_decoder_tests()
+    # print("Test3 : Surface code - sample syndrome with Stim and convert to input API of PEPS decoder")
+    # run_sampler_connection_test() 
+    # print("Test4: Sampler for batch version")
+    # run_sampler_batch_tests() 
+    print("Test5: build MWPM with PyMatching and test decoder")
+    run_MWPM_decoder_tests()
     
     
     
