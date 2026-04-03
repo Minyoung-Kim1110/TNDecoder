@@ -5,14 +5,14 @@ import numpy as np
 import stim
 import pymatching
 
-from .stim_sampler import (
+from ..Surface_code_sampler.stim_sampler import (
     StimSurfaceSample,
     StimSurfaceBatchSample,
     make_unrotated_sc_depolarizing_capacity_circuit,
     sample_surface_code_depolarizing,
     sample_surface_code_depolarizing_batch,
 )
-from .metric import logical_failures_from_predictions
+from ..metric import logical_failures_from_predictions
 
 
 @dataclass

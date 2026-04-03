@@ -3,8 +3,8 @@ from dataclasses import dataclass
 from typing import Any, List, Dict, Tuple, Optional
 from .PEPS import contract_finPEPS
 from .weights_PEPS import * 
-from .stim_sampler import StimSurfaceBatchSample, StimSurfaceSample
-from .metric import * 
+from ..Surface_code_sampler.stim_sampler import StimSurfaceBatchSample, StimSurfaceSample
+from ..metric import * 
 
 # Pauli utils 
 PAULI_TO_XZ = {"I": (0, 0),

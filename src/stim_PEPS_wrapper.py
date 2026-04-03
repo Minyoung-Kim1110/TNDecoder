@@ -1,6 +1,6 @@
-from .stim_sampler import sample_surface_code_depolarizing
-from .weights_PEPS import *
-from .PEPS_Pauli_decoder import pauli_coset_likelihoods_peps, most_likely_coset
+from .Surface_code_sampler.stim_sampler import sample_surface_code_depolarizing
+from .ML_decoder_PEPS.weights_PEPS import *
+from .ML_decoder_PEPS.PEPS_Pauli_decoder import pauli_coset_likelihoods_peps, most_likely_coset
 
 def sample_and_decode_surface_code_depolarizing(
     distance: int = 5,

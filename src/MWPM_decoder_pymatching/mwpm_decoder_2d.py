@@ -4,13 +4,13 @@ from typing import Dict, Optional, Tuple
 import numpy as np
 import pymatching
 
-from .stim_sampler import (
+from ..Surface_code_sampler.stim_sampler import (
     StimSurfaceSample,
     StimSurfaceBatchSample,
     sample_surface_code_depolarizing,
     sample_surface_code_depolarizing_batch,
 )
-from .metric import logical_failures_from_predictions
+from ..metric import logical_failures_from_predictions
 
 
 @dataclass
