@@ -3,14 +3,14 @@ import numpy as np
 import stim
 import string
 from typing import List, Tuple, Dict, Optional
-from src.functions import * 
-from src.mtimes_MPO import * 
-from src.PEPS import * 
-from src.PEPS_Pauli_decoder import *
-from src.weights_PEPS import * 
-from src.stim_sampler import * 
+from src.ML_decoder_PEPS.functions import * 
+from src.ML_decoder_PEPS.mtimes_MPO import * 
+from src.ML_decoder_PEPS.PEPS import * 
+from src.ML_decoder_PEPS.PEPS_Pauli_decoder import *
+from src.ML_decoder_PEPS.weights_PEPS import * 
+from src.Surface_code_sampler.stim_sampler import * 
 from src.stim_PEPS_wrapper import * 
-from src.mwpm_decoder import *
+from src.MWPM_decoder_pymatching.mwpm_decoder import *
 
 # Generate random open boundary grid for test 
 def make_random_open_boundary_grid(
@@ -155,11 +155,11 @@ def run_finpeps_test():
 
     approx = contract_finPEPS(T, Nkeep=Nkeep, Nsweep=Nsweep)
 
-    print("Abs diff          :", abs(exact - approx))
-    print("Rel diff          :", abs(exact - approx) / (abs(exact) + 1e-30))
 
     # assert tight agreement
     assert np.allclose(approx, exact, rtol=1e-10, atol=1e-10), "Mismatch: finPEPS vs exact"
+    if abs(exact - approx)<1e-12: 
+        print("Approximate contraction test passed")
 
 
 
@@ -616,16 +616,18 @@ def run_MWPM_decoder_tests() -> None:
 
 if __name__=="__main__":
     
-    # print("Test1 : PEPS contraction ")
-    # run_finpeps_test() 
-    # print("Test2 : PEPS Pauli coset likelihood decoder")
-    # run_peps_decoder_tests()
-    # print("Test3 : Surface code - sample syndrome with Stim and convert to input API of PEPS decoder")
-    # run_sampler_connection_test() 
-    # print("Test4: Sampler for batch version")
-    # run_sampler_batch_tests() 
+    print("Test1 : PEPS contraction ")
+    run_finpeps_test() 
+    print("Test2 : PEPS Pauli coset likelihood decoder")
+    run_peps_decoder_tests()
+    print("Test3 : Surface code - sample syndrome with Stim and convert to input API of PEPS decoder")
+    run_sampler_connection_test() 
+    print("Test4: Sampler for batch version")
+    run_sampler_batch_tests() 
     print("Test5: build MWPM with PyMatching and test decoder")
     run_MWPM_decoder_tests()
+
+
     
     
     
