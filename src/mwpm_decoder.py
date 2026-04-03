@@ -12,7 +12,7 @@ from .stim_sampler import (
     sample_surface_code_depolarizing,
     sample_surface_code_depolarizing_batch,
 )
-
+from .metric import logical_failures_from_predictions
 
 
 @dataclass
@@ -177,28 +177,6 @@ def decode_detector_bits_with_matching(
 
     return np.asarray(out, dtype=np.uint8)
 
-def logical_failure_from_observable_flips(
-    actual_observable_flips: np.ndarray,
-    predicted_observable_flips: np.ndarray,
-) -> np.ndarray:
-    """Shot-wise logical failure event from residual observable flips."""
-    actual = np.asarray(actual_observable_flips, dtype=np.uint8)
-    predicted = np.asarray(predicted_observable_flips, dtype=np.uint8)
-
-    if actual.ndim == 1:
-        actual = actual[None, :]
-    if predicted.ndim == 1:
-        predicted = predicted[None, :]
-
-    if actual.shape != predicted.shape:
-        raise ValueError(
-            f"Shape mismatch: actual {actual.shape} vs predicted {predicted.shape}"
-        )
-
-    residual = np.bitwise_xor(actual, predicted)
-    return np.any(residual != 0, axis=1).astype(np.uint8)
-
-
 def decode_stim_surface_sample_with_mwpm(
     sample: StimSurfaceSample,
     *,
@@ -257,7 +235,7 @@ def decode_stim_surface_batch_with_mwpm(
     else:
         predicted_obs = out
 
-    failures = logical_failure_from_observable_flips(
+    failures = logical_failures_from_predictions(
         batch.observable_flips,
         predicted_obs,
     )

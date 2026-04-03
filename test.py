@@ -614,8 +614,6 @@ def run_MWPM_decoder_tests() -> None:
     print("All MWPM tests using StimSurfaceSample / StimSurfaceBatchSample passed.")
 
 
-    
-
 if __name__=="__main__":
     
     # print("Test1 : PEPS contraction ")

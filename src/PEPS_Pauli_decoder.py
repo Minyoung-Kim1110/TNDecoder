@@ -1,8 +1,10 @@
 import numpy as np
-from typing import Dict, Tuple, Optional
+from dataclasses import dataclass
+from typing import Any, List, Dict, Tuple, Optional
 from .PEPS import contract_finPEPS
 from .weights_PEPS import * 
-
+from .stim_sampler import StimSurfaceBatchSample, StimSurfaceSample
+from .metric import * 
 
 # Pauli utils 
 PAULI_TO_XZ = {"I": (0, 0),
@@ -10,7 +12,18 @@ PAULI_TO_XZ = {"I": (0, 0),
                "Y": (1, 1),
                "Z": (0, 1),}
 
+@dataclass
+class PEPSBatchDecodeResult:
+    coset_likelihoods: List[Any]
+    ml_cosets: List[Any]
+    predicted_observable_flips: np.ndarray   # (shots, num_obs)
+    logical_failures: np.ndarray             # (shots,)
+    logical_error_rate: float
 
+    @property
+    def logical_fidelity(self) -> float:
+        return 1.0 - self.logical_error_rate
+    
 # Local tensor construction 
 
 def _build_face_tensor(
@@ -288,6 +301,294 @@ def pauli_coset_likelihoods_peps(
         (1, 1): float(np.real_if_close(L11)),
     }
 
+
+# ---------------------------------------------------------------------------
+# PEPS logical-coset handling
+# ---------------------------------------------------------------------------
+
+def _logical_bits_from_ml_coset(ml_coset):
+    """
+    Convert PEPS most_likely_coset(...) output into logical bits (z_log, x_log).
+
+    Supported conventions:
+      1. ((z_log, x_log), score)
+      2. (z_log, x_log)
+      3. integer 0,1,2,3
+      4. string labels "I","Z","X","Y"
+    """
+
+    # Case 0: output like ((0,0), score)
+    if (
+        isinstance(ml_coset, (tuple, list))
+        and len(ml_coset) == 2
+        and isinstance(ml_coset[0], (tuple, list))
+        and len(ml_coset[0]) == 2
+    ):
+        a, b = ml_coset[0]
+        if a in (0, 1) and b in (0, 1):
+            return int(a), int(b)
+
+    # Case 1: tuple/list of two bits
+    if isinstance(ml_coset, (tuple, list)) and len(ml_coset) == 2:
+        a, b = ml_coset
+        if a in (0, 1) and b in (0, 1):
+            return int(a), int(b)
+
+    # Case 2: integer label
+    if isinstance(ml_coset, (int, np.integer)):
+        lut = {
+            0: (0, 0),
+            1: (1, 0),
+            2: (0, 1),
+            3: (1, 1),
+        }
+        if int(ml_coset) in lut:
+            return lut[int(ml_coset)]
+
+    # Case 3: string label
+    s = str(ml_coset).strip().upper()
+    lut = {
+        "I": (0, 0),
+        "Z": (1, 0),
+        "X": (0, 1),
+        "Y": (1, 1),
+        "II": (0, 0),
+        "IZ": (1, 0),
+        "IX": (0, 1),
+        "IY": (1, 1),
+        "L0": (0, 0),
+        "LZ": (1, 0),
+        "LX": (0, 1),
+        "LY": (1, 1),
+    }
+    if s in lut:
+        return lut[s]
+
+    raise ValueError(
+        f"Could not infer logical bits from most_likely_coset output: {ml_coset!r}"
+    )
+
+def predicted_observable_flip_from_ml_coset(
+    ml_coset,
+    memory_basis: str,
+    num_obs: int = 1,
+):
+    """
+    Convert PEPS ML logical coset to Stim observable flip prediction.
+
+    Convention:
+      ml_coset -> (z_log, x_log)
+      residual logical operator = Z_L^z_log X_L^x_log
+    """
+    if num_obs != 1:
+        raise NotImplementedError(
+            "Currently assumes one logical observable."
+        )
+
+    z_log, x_log = _logical_bits_from_ml_coset(ml_coset)
+
+    if memory_basis == "x":
+        # measured logical X flips if residual contains Z
+        bit = z_log
+    elif memory_basis == "z":
+        # measured logical Z flips if residual contains X
+        bit = x_log
+    else:
+        raise ValueError("memory_basis must be 'x' or 'z'.")
+
+    return np.array([bit], dtype=np.uint8)
+
+# ---------------------------------------------------------------------------
+# PEPS decoding on an exact batch
+# ---------------------------------------------------------------------------
+
+def peps_coset_likelihoods_for_batch(
+    batch: StimSurfaceBatchSample,
+    *,
+    p: float,
+    Nkeep: int = 128,
+    Nsweep: int = 1,
+    W_h: Optional[np.ndarray] = None,
+    W_v: Optional[np.ndarray] = None,
+) -> List[Any]:
+    """
+    Compute PEPS logical-coset likelihoods shot-by-shot for a batched Stim sample.
+    """
+    nrow, ncol = batch.sX[0].shape
+    if W_h is None or W_v is None:
+        W_h_default, W_v_default = depolarizing_weights(nrow, ncol,p=p)
+        if W_h is None:
+            W_h = W_h_default
+        if W_v is None:
+            W_v = W_v_default
+
+    shots = batch.shots
+    cosets: List[Any] = []
+    for k in range(shots):
+        cosets_k = pauli_coset_likelihoods_peps(
+            sX=batch.sX[k],
+            sZ=batch.sZ[k],
+            active_X=batch.active_X[k],
+            active_Z=batch.active_Z[k],
+            W_h=W_h,
+            W_v=W_v,
+            Nkeep=Nkeep,
+            Nsweep=Nsweep,
+        )
+        cosets.append(cosets_k)
+    return cosets
+
+def decode_batch_with_peps(
+    batch: StimSurfaceBatchSample,
+    *,
+    p: float,
+    memory_basis: str,
+    Nkeep: int = 128,
+    Nsweep: int = 1,
+    W_h=None,
+    W_v=None,
+    debug_failures=False, 
+):
+    coset_likelihoods = peps_coset_likelihoods_for_batch(
+        batch=batch,
+        p=p,
+        Nkeep=Nkeep,
+        Nsweep=Nsweep,
+        W_h=W_h,
+        W_v=W_v,
+    )
+
+    ml_cosets = [most_likely_coset(c) for c in coset_likelihoods]
+
+    num_obs = int(batch.observable_flips.shape[1])
+
+    predicted_obs = np.stack(
+        [
+            predicted_observable_flip_from_ml_coset(
+                ml_coset=c,
+                memory_basis=memory_basis,
+                num_obs=num_obs,
+            )
+            for c in ml_cosets
+        ],
+        axis=0,
+    ).astype(np.uint8)
+
+    failures = logical_failures_from_predictions(
+        actual_observable_flips=batch.observable_flips,
+        predicted_observable_flips=predicted_obs,
+    )
+
+    # ==========================
+    # DEBUG PRINTS
+    # ==========================
+
+    if debug_failures:
+
+        for k in range(batch.shots):
+
+            if failures[k]:
+
+                print("\n==========================")
+                print("PEPS FAILURE")
+                print("shot =", k)
+
+                print("actual observable =",
+                      batch.observable_flips[k])
+
+                print("predicted observable =",
+                      predicted_obs[k])
+
+                print("ml coset =",
+                      ml_cosets[k])
+
+                print("coset likelihoods =")
+
+                cos = coset_likelihoods[k]
+
+                # pretty print likelihoods
+                if isinstance(cos, dict):
+
+                    for key,val in cos.items():
+
+                        print("   ", key, ":", val)
+
+                else:
+
+                    print(cos)
+
+                # optional syndrome inspection
+                print("sX:")
+                print(batch.sX[k])
+
+                print("sZ:")
+                print(batch.sZ[k])
+                
+                print("detector_bits:")
+                print(batch.detector_bits[k])
+
+                print("observable_flips:")
+                print(batch.observable_flips[k])
+                print("nonzero detector coordinates:")
+                for det_id in np.flatnonzero(batch.detector_bits[k]):
+                    print(det_id, batch.detector_coords[det_id])
+                print("==========================")
+
+    return PEPSBatchDecodeResult(
+        coset_likelihoods=coset_likelihoods,
+        ml_cosets=ml_cosets,
+        predicted_observable_flips=predicted_obs,
+        logical_failures=failures,
+        logical_error_rate=float(np.mean(failures)),
+    )
+# def decode_batch_with_peps(
+#     batch: StimSurfaceBatchSample,
+#     *,
+#     p: float,
+#     memory_basis: str,
+#     Nkeep: int = 128,
+#     Nsweep: int = 1,
+#     W_h: Optional[np.ndarray] = None,
+#     W_v: Optional[np.ndarray] = None,
+# ) -> PEPSBatchDecodeResult:
+#     """
+#     Decode the exact same Stim batch with the PEPS ML decoder.
+#     """
+#     coset_likelihoods = peps_coset_likelihoods_for_batch(
+#         batch=batch,
+#         p=p,
+#         Nkeep=Nkeep,
+#         Nsweep=Nsweep,
+#         W_h=W_h,
+#         W_v=W_v,
+#     )
+
+#     ml_cosets = [most_likely_coset(c) for c in coset_likelihoods]
+#     num_obs = int(batch.observable_flips.shape[1])
+#     predicted_obs = np.stack(
+#         [
+#             predicted_observable_flip_from_ml_coset(
+#                 ml_coset=c,
+#                 memory_basis=memory_basis,
+#                 num_obs=num_obs,
+#             )
+#             for c in ml_cosets
+#         ],
+#         axis=0,
+#     ).astype(np.uint8)
+
+#     failures = logical_failures_from_predictions(
+#         actual_observable_flips=batch.observable_flips,
+#         predicted_observable_flips=predicted_obs,
+#     )
+
+#     return PEPSBatchDecodeResult(
+#         coset_likelihoods=coset_likelihoods,
+#         ml_cosets=ml_cosets,
+#         predicted_observable_flips=predicted_obs,
+#         logical_failures=failures,
+#         logical_error_rate=float(np.mean(failures)),
+#     )
 
 # Helper functions  
 def total_likelihood_from_cosets(cosets):
