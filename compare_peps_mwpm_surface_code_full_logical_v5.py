@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from typing import Any, Dict, Iterable, List, Optional
 import numpy as np
 
-from src.Surface_code_sampler.surface_code_capacity_sampler_full_logical_v5 import (
+from src.Surface_code_sampler.surface_code_capacity_sampler_full_logical_v6 import (
     StimSurfaceBatchSampleFullLogical,
     sample_surface_code_capacity_batch_full_logical,
 )
@@ -17,6 +17,19 @@ from src.MWPM_decoder_pymatching.mwpm_decoder_2d import (
     build_2d_css_matching,
     decode_2d_css_slice,
 )
+@property
+def batch(self) -> StimSurfaceBatchSample:
+    return StimSurfaceBatchSample(
+        circuit=self.batch_x.circuit,
+        detector_bits=self.batch_x.detector_bits,
+        observable_flips=self.logical_bits,
+        sX=self.batch_x.sX,
+        sZ=self.batch_z.sZ,
+        active_X=self.batch_x.active_X,
+        active_Z=self.batch_z.active_Z,
+        detector_coords=self.batch_x.detector_coords,
+    )
+    
 
 @dataclass(frozen=True)
 class DecoderFullLogicalPoint:
