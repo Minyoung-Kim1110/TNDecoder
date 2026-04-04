@@ -5,19 +5,21 @@ from typing import Dict, Any, Tuple
 import numpy as np
 
 # v5 comparison driver
-from compare_peps_mwpm_surface_code_full_logical_v5 import (
+from compare_peps_mwpm_surface_code_full_logical_v6 import (
     compare_peps_mwpm_surface_code_full_logical,
 )
 
 # v6 sampler
-from src.Surface_code_sampler.surface_code_capacity_sampler_full_logical_v6 import (
+from src.Surface_code_sampler.surface_code_capacity_sampler_full_logical_v9 import (
     sample_surface_code_capacity_batch_full_logical,
 )
 
 # low-level decoders
 from src.ML_decoder_PEPS.PEPS_Pauli_decoder import decode_batch_with_peps
 from src.MWPM_decoder_pymatching.mwpm_decoder_2d import decode_2d_surface_batch_with_mwpm
-
+import inspect
+print("Sampler source file:", inspect.getsourcefile(sample_surface_code_capacity_batch_full_logical))
+print("Sampler function:", sample_surface_code_capacity_batch_full_logical.__name__)
 
 # ============================================================
 # Small utilities
