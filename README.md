@@ -1,5 +1,5 @@
 ### 1. Elevator pitch 
-My project aims to developing a noise-adapted, tensor-network–based maximum-likelihood decoder for quantum error correction, using a hardware motivated quasi-static (1/f) charge-noise model mapped to an effective (Z)-Pauli channel. I will focus on reproducing TN based ML decoder, then combine Stim-generated syndrome data with tensor-network contraction to study repetition and surface code. Furthremore, if possible, I plan to investigate how device level noise strength determin logical error rates and logical memory lifetime. 
+My project aims to developing a noise-adapted, tensor-network–based maximum-likelihood decoder for quantum error correction, using a hardware motivated quasi-static (1/f) charge-noise model. I will focus on reproducing Tensor network based maximum-likelihood decoder, then combine Stim-generated syndrome data with tensor-network contraction to study repetition and surface code. Furthremore, if possible, I plan to investigate how device level noise strength determin logical error rates and logical memory lifetime. 
 
 ### 2. Collaborator 
 None. 
