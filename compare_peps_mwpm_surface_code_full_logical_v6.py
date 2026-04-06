@@ -10,7 +10,8 @@ from src.Surface_code_sampler.surface_code_capacity_sampler_full_logical_v9 impo
     StimSurfaceBatchSampleFullLogical,
     sample_surface_code_capacity_batch_full_logical,
 )
-from src.ML_decoder_PEPS.PEPS_Pauli_decoder import decode_batch_with_peps
+from src.ML_decoder_PEPS.PEPS_Pauli_decoder_v5 import decode_batch_with_peps_v5
+decode_batch_with_peps=decode_batch_with_peps_v5
 from src.MWPM_decoder_pymatching.mwpm_decoder_2d import decode_2d_surface_batch_with_mwpm
 
 
@@ -151,6 +152,7 @@ def _decode_predictions_from_v7_data(
         Nkeep=peps_nkeep,
         Nsweep=peps_nsweep,
         debug_failures=False,
+        debug_shots=5,
     )
     out_z_peps = decode_batch_with_peps(
         batch=batch_z,
@@ -159,6 +161,7 @@ def _decode_predictions_from_v7_data(
         Nkeep=peps_nkeep,
         Nsweep=peps_nsweep,
         debug_failures=False,
+        debug_shots=5,
     )
 
     out_x_mwpm = decode_2d_surface_batch_with_mwpm(

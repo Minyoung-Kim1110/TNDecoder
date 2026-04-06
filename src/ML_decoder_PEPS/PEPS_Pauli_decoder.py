@@ -732,96 +732,96 @@ def _auto_choose_logical_masks(active_X: np.ndarray, active_Z: np.ndarray):
     return mx, mz, debug_info
 
 
-def pauli_coset_likelihoods_peps(
-    sX: np.ndarray,
-    sZ: np.ndarray,
-    W_h: np.ndarray,
-    W_v: np.ndarray,
-    active_X=None,
-    active_Z=None,
-    logical_x_cut_col: Optional[int] = None,   # unused now, kept for compatibility
-    logical_z_cut_row: Optional[int] = None,   # unused now, kept for compatibility
-    Nkeep: int = 128,
-    Nsweep: int = 1,
-    logical_X_masks=None,
-    logical_Z_masks=None,
-    return_debug_info: bool = False,
-):
-    r"""
-    Compute physical logical-coset likelihoods using logical masks adapted to
-    the actual masked surface-code embedding.
+# def pauli_coset_likelihoods_peps(
+#     sX: np.ndarray,
+#     sZ: np.ndarray,
+#     W_h: np.ndarray,
+#     W_v: np.ndarray,
+#     active_X=None,
+#     active_Z=None,
+#     logical_x_cut_col: Optional[int] = None,   # unused now, kept for compatibility
+#     logical_z_cut_row: Optional[int] = None,   # unused now, kept for compatibility
+#     Nkeep: int = 128,
+#     Nsweep: int = 1,
+#     logical_X_masks=None,
+#     logical_Z_masks=None,
+#     return_debug_info: bool = False,
+# ):
+#     r"""
+#     Compute physical logical-coset likelihoods using logical masks adapted to
+#     the actual masked surface-code embedding.
 
-    Coset labels:
-      (0,0) -> I
-      (1,0) -> Z
-      (0,1) -> X
-      (1,1) -> Y
-    """
-    sX = np.asarray(sX, dtype=np.uint8)
-    sZ = np.asarray(sZ, dtype=np.uint8)
-    nrow, ncol = sX.shape
+#     Coset labels:
+#       (0,0) -> I
+#       (1,0) -> Z
+#       (0,1) -> X
+#       (1,1) -> Y
+#     """
+#     sX = np.asarray(sX, dtype=np.uint8)
+#     sZ = np.asarray(sZ, dtype=np.uint8)
+#     nrow, ncol = sX.shape
 
-    if active_X is None:
-        active_X = np.ones((nrow, ncol), dtype=np.uint8)
-    else:
-        active_X = np.asarray(active_X, dtype=np.uint8)
+#     if active_X is None:
+#         active_X = np.ones((nrow, ncol), dtype=np.uint8)
+#     else:
+#         active_X = np.asarray(active_X, dtype=np.uint8)
 
-    if active_Z is None:
-        active_Z = np.ones((nrow, ncol), dtype=np.uint8)
-    else:
-        active_Z = np.asarray(active_Z, dtype=np.uint8)
+#     if active_Z is None:
+#         active_Z = np.ones((nrow, ncol), dtype=np.uint8)
+#     else:
+#         active_Z = np.asarray(active_Z, dtype=np.uint8)
 
-    if logical_X_masks is None or logical_Z_masks is None:
-        auto_X, auto_Z, auto_info = _auto_choose_logical_masks(active_X, active_Z)
-        if logical_X_masks is None:
-            logical_X_masks = auto_X
-        if logical_Z_masks is None:
-            logical_Z_masks = auto_Z
-        debug_info = auto_info
-    else:
-        debug_info = {
-            "meta_x": "user-supplied",
-            "meta_z": "user-supplied",
-            "weight_x": _edge_mask_weight(logical_X_masks),
-            "weight_z": _edge_mask_weight(logical_Z_masks),
-            "overlap": _symplectic_overlap_masks(logical_X_masks, logical_Z_masks),
-        }
+#     if logical_X_masks is None or logical_Z_masks is None:
+#         auto_X, auto_Z, auto_info = _auto_choose_logical_masks(active_X, active_Z)
+#         if logical_X_masks is None:
+#             logical_X_masks = auto_X
+#         if logical_Z_masks is None:
+#             logical_Z_masks = auto_Z
+#         debug_info = auto_info
+#     else:
+#         debug_info = {
+#             "meta_x": "user-supplied",
+#             "meta_z": "user-supplied",
+#             "weight_x": _edge_mask_weight(logical_X_masks),
+#             "weight_z": _edge_mask_weight(logical_Z_masks),
+#             "overlap": _symplectic_overlap_masks(logical_X_masks, logical_Z_masks),
+#         }
 
-    zero_masks = _zero_edge_masks(nrow, ncol)
-    Y_masks = _xor_edge_masks(logical_X_masks, logical_Z_masks)
+#     zero_masks = _zero_edge_masks(nrow, ncol)
+#     Y_masks = _xor_edge_masks(logical_X_masks, logical_Z_masks)
 
-    def contract_coset(masks):
-        mask_h_x, mask_h_z, mask_v_x, mask_v_z = masks
-        T = build_pauli_peps(
-            sX=sX,
-            sZ=sZ,
-            W_h=W_h,
-            W_v=W_v,
-            active_X=active_X,
-            active_Z=active_Z,
-            mask_h_x=mask_h_x,
-            mask_h_z=mask_h_z,
-            mask_v_x=mask_v_x,
-            mask_v_z=mask_v_z,
-        )
-        val = contract_finPEPS(T, Nkeep=Nkeep, Nsweep=Nsweep)
-        return float(np.real_if_close(val))
+#     def contract_coset(masks):
+#         mask_h_x, mask_h_z, mask_v_x, mask_v_z = masks
+#         T = build_pauli_peps(
+#             sX=sX,
+#             sZ=sZ,
+#             W_h=W_h,
+#             W_v=W_v,
+#             active_X=active_X,
+#             active_Z=active_Z,
+#             mask_h_x=mask_h_x,
+#             mask_h_z=mask_h_z,
+#             mask_v_x=mask_v_x,
+#             mask_v_z=mask_v_z,
+#         )
+#         val = contract_finPEPS(T, Nkeep=Nkeep, Nsweep=Nsweep)
+#         return float(np.real_if_close(val))
 
-    L00 = contract_coset(zero_masks)         # I
-    L10 = contract_coset(logical_Z_masks)    # Z
-    L01 = contract_coset(logical_X_masks)    # X
-    L11 = contract_coset(Y_masks)            # Y
+#     L00 = contract_coset(zero_masks)         # I
+#     L10 = contract_coset(logical_Z_masks)    # Z
+#     L01 = contract_coset(logical_X_masks)    # X
+#     L11 = contract_coset(Y_masks)            # Y
 
-    out = {
-        (0, 0): L00,
-        (1, 0): L10,
-        (0, 1): L01,
-        (1, 1): L11,
-    }
+#     out = {
+#         (0, 0): L00,
+#         (1, 0): L10,
+#         (0, 1): L01,
+#         (1, 1): L11,
+#     }
 
-    if return_debug_info:
-        return out, debug_info
-    return out
+#     if return_debug_info:
+#         return out, debug_info
+#     return out
 # def pauli_coset_likelihoods_peps(
 #     sX: np.ndarray,
 #     sZ: np.ndarray,
@@ -906,67 +906,67 @@ def pauli_coset_likelihoods_peps(
 #         (0, 1): L01,
 #         (1, 1): L11,
 #     }
-# def pauli_coset_likelihoods_peps(
-#     sX: np.ndarray,
-#     sZ: np.ndarray,
-#     W_h: np.ndarray,
-#     W_v: np.ndarray,
-#     active_X=None,
-#     active_Z=None,
-#     logical_x_cut_col: Optional[int] = None,
-#     logical_z_cut_row: Optional[int] = None,
-#     Nkeep: int = 128,
-#     Nsweep: int = 1,
-# ):
-#     """
-#     Same output format as pauli_coset_likelihoods_peps, but for masked surface-code geometry.
-#     """
-#     T = build_pauli_peps(
-#         sX=sX,
-#         sZ=sZ,
-#         active_X=active_X,
-#         active_Z=active_Z,
-#         W_h=W_h,
-#         W_v=W_v,
-#     )
-#     nrow, ncol = np.shape(sX)
-#     if logical_x_cut_col is None or logical_z_cut_row is None:
-#         default_col = ncol//2 
-#         default_row = nrow //2 
-#         # default_col, default_row = choose_default_logical_cuts(active_X, active_Z)
-#         if logical_x_cut_col is None:
-#             logical_x_cut_col = default_col
-#         if logical_z_cut_row is None:
-#             logical_z_cut_row = default_row
+def pauli_coset_likelihoods_peps(
+    sX: np.ndarray,
+    sZ: np.ndarray,
+    W_h: np.ndarray,
+    W_v: np.ndarray,
+    active_X=None,
+    active_Z=None,
+    logical_x_cut_col: Optional[int] = None,
+    logical_z_cut_row: Optional[int] = None,
+    Nkeep: int = 128,
+    Nsweep: int = 1,
+):
+    """
+    Same output format as pauli_coset_likelihoods_peps, but for masked surface-code geometry.
+    """
+    T = build_pauli_peps(
+        sX=sX,
+        sZ=sZ,
+        active_X=active_X,
+        active_Z=active_Z,
+        W_h=W_h,
+        W_v=W_v,
+    )
+    nrow, ncol = np.shape(sX)
+    if logical_x_cut_col is None or logical_z_cut_row is None:
+        default_col = ncol//2 
+        default_row = nrow //2 
+        # default_col, default_row = choose_default_logical_cuts(active_X, active_Z)
+        if logical_x_cut_col is None:
+            logical_x_cut_col = default_col
+        if logical_z_cut_row is None:
+            logical_z_cut_row = default_row
 
-#     plain = _contract_with_optional_twists(T, Nkeep=Nkeep, Nsweep=Nsweep)
-#     zx = _contract_with_optional_twists(
-#         T, twist_x=True, cut_col=logical_x_cut_col, Nkeep=Nkeep, Nsweep=Nsweep
-#     )
-#     zz = _contract_with_optional_twists(
-#         T, twist_z=True, cut_row=logical_z_cut_row, Nkeep=Nkeep, Nsweep=Nsweep
-#     )
-#     zxz = _contract_with_optional_twists(
-#         T,
-#         twist_x=True,
-#         cut_col=logical_x_cut_col,
-#         twist_z=True,
-#         cut_row=logical_z_cut_row,
-#         Nkeep=Nkeep,
-#         Nsweep=Nsweep,
-#     )
+    plain = _contract_with_optional_twists(T, Nkeep=Nkeep, Nsweep=Nsweep)
+    zx = _contract_with_optional_twists(
+        T, twist_x=True, cut_col=logical_x_cut_col, Nkeep=Nkeep, Nsweep=Nsweep
+    )
+    zz = _contract_with_optional_twists(
+        T, twist_z=True, cut_row=logical_z_cut_row, Nkeep=Nkeep, Nsweep=Nsweep
+    )
+    zxz = _contract_with_optional_twists(
+        T,
+        twist_x=True,
+        cut_col=logical_x_cut_col,
+        twist_z=True,
+        cut_row=logical_z_cut_row,
+        Nkeep=Nkeep,
+        Nsweep=Nsweep,
+    )
 
-#     L00 = 0.25 * (plain + zx + zz + zxz)
-#     L10 = 0.25 * (plain - zx + zz - zxz)
-#     L01 = 0.25 * (plain + zx - zz - zxz)
-#     L11 = 0.25 * (plain - zx - zz + zxz)
+    L00 = 0.25 * (plain + zx + zz + zxz)
+    L10 = 0.25 * (plain - zx + zz - zxz)
+    L01 = 0.25 * (plain + zx - zz - zxz)
+    L11 = 0.25 * (plain - zx - zz + zxz)
 
-#     return {
-#         (0, 0): float(np.real_if_close(L00)),
-#         (1, 0): float(np.real_if_close(L10)),
-#         (0, 1): float(np.real_if_close(L01)),
-#         (1, 1): float(np.real_if_close(L11)),
-#     }
+    return {
+        (0, 0): float(np.real_if_close(L00)),
+        (1, 0): float(np.real_if_close(L10)),
+        (0, 1): float(np.real_if_close(L01)),
+        (1, 1): float(np.real_if_close(L11)),
+    }
 
 
 # ---------------------------------------------------------------------------
