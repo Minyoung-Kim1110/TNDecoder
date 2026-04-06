@@ -302,3 +302,84 @@ def run_surface_code_mwpm_batch(
     )
 
 
+@dataclass
+class SurfaceCodeMWPMFullLogicalResult:
+    """
+    Full logical error rate combining both X and Z logical observables.
+
+    Under code-capacity Pauli noise the X and Z error channels are independent:
+      - memory_x experiment measures Z-type logical failures  (p_L_Z)
+      - memory_z experiment measures X-type logical failures  (p_L_X)
+
+    The combined full logical failure probability is:
+        p_L_full = 1 - (1 - p_L_X) * (1 - p_L_Z)
+    """
+
+    result_x_basis: SurfaceCodeMWPMBatchResult   # memory_x → lz prediction
+    result_z_basis: SurfaceCodeMWPMBatchResult   # memory_z → lx prediction
+
+    @property
+    def p_L_Z(self) -> float:
+        """Z-type logical error rate (from memory_x experiment)."""
+        return self.result_x_basis.logical_error_rate
+
+    @property
+    def p_L_X(self) -> float:
+        """X-type logical error rate (from memory_z experiment)."""
+        return self.result_z_basis.logical_error_rate
+
+    @property
+    def logical_error_rate(self) -> float:
+        """Full logical error rate (either X or Z logical error occurs)."""
+        return 1.0 - (1.0 - self.p_L_X) * (1.0 - self.p_L_Z)
+
+
+def run_surface_code_mwpm_full_logical(
+    *,
+    distance: int,
+    p: float,
+    shots: int,
+    rounds: int = 3,
+    target_t: int = 1,
+    decompose_errors: bool = True,
+    enable_correlations: bool = False,
+    **dem_kwargs,
+) -> SurfaceCodeMWPMFullLogicalResult:
+    """
+    Compute full logical error rate by running MWPM in both memory bases.
+
+    memory_x → Z-type logical error rate (p_L_Z)
+    memory_z → X-type logical error rate (p_L_X)
+    Full logical failure = failure in either channel.
+
+    Under depolarizing noise, X and Z channels are decoupled, so running
+    the two bases independently gives the correct combined rate.
+    """
+    result_x = run_surface_code_mwpm_batch(
+        distance=distance,
+        p=p,
+        shots=shots,
+        memory_basis="x",
+        rounds=rounds,
+        target_t=target_t,
+        decompose_errors=decompose_errors,
+        enable_correlations=enable_correlations,
+        **dem_kwargs,
+    )
+    result_z = run_surface_code_mwpm_batch(
+        distance=distance,
+        p=p,
+        shots=shots,
+        memory_basis="z",
+        rounds=rounds,
+        target_t=target_t,
+        decompose_errors=decompose_errors,
+        enable_correlations=enable_correlations,
+        **dem_kwargs,
+    )
+    return SurfaceCodeMWPMFullLogicalResult(
+        result_x_basis=result_x,
+        result_z_basis=result_z,
+    )
+
+

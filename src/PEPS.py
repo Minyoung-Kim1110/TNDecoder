@@ -77,8 +77,16 @@ def contract_finPEPS(T: List[List[np.ndarray]], Nkeep: int, Nsweep: int):
             tmp = contract(T2[it2], 2, np.conjugate(Aloc[it2]), 2)
             T2[it2] = np.transpose(tmp, (2, 3, 0, 1))   # (D,U,L,R)
         S_scalar = np.asarray(S).squeeze()
+        if np.size(S_scalar) == 0:
+            # Accumulated tensor network norm is numerically zero:
+            # all singular values were below threshold (typically because
+            # an intermediate contraction produced a near-zero tensor).
+            # The partition function for this coset is 0.
+            return 0.0
         if np.size(S_scalar) != 1:
             raise ValueError(f"ERR: canon_form(..., id=0) returned non-scalar S with shape {np.shape(S)}")
+        if float(S_scalar) == 0.0:
+            return 0.0
         logNorm += np.log(float(S_scalar))
     res = np.array([[1.0]], dtype=np.result_type(*[x.dtype for row in T for x in row]))
 
