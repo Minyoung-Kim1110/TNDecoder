@@ -106,56 +106,77 @@ def _rounded_detector_coords(circuit: stim.Circuit) -> Dict[int, Tuple[int, int,
         out[int(det_id)] = (x, y, t)
     return out
 
+from collections import defaultdict
 
-def _split_check_types_from_coords(
+def _infer_spatial_families_from_all_coords(
     detector_coords: Dict[int, Tuple[int, int, int]],
     memory_basis: str = "x",
-    target_t: int = 1,
 ):
     """
-    Split detectors on a chosen time slice into X-check and Z-check groups.
+    Infer the two spatial stabilizer families from all detector coordinates,
+    ignoring time.
 
-    Classification rule:
-    sites appearing already at t=0 correspond to one stabilizer type; the
-    complementary sites on the chosen later slice correspond to the other type.
+    Current repo behavior used target_t slicing plus overlap with t=0.
+    For noiseless repeated extraction, we instead classify spatial sites and
+    then collapse each site's detector worldline over time.
+
+    Returns:
+        x_sites, z_sites as sets of spatial coordinates (x, y).
     """
     if memory_basis not in ("x", "z"):
         raise ValueError("memory_basis must be 'x' or 'z'.")
 
-    first_round_xy = {
-        (x, y) for _, (x, y, t) in detector_coords.items() if t == 0
-    }
-    target_round = [
-        (det_id, x, y)
-        for det_id, (x, y, t) in detector_coords.items()
-        if t == target_t
-    ]
+    spatial_sites = sorted({(x, y) for _, (x, y, _) in detector_coords.items()})
 
-    a_type = []
-    b_type = []
-    for det_id, x, y in target_round:
-        if (x, y) in first_round_xy:
-            a_type.append((det_id, x, y))
+    fam0 = set()
+    fam1 = set()
+    for x, y in spatial_sites:
+        # Provisional checkerboard split. Verify once with the debug script below.
+        if (x + y) % 2 == 0:
+            fam0.add((x, y))
         else:
-            b_type.append((det_id, x, y))
+            fam1.add((x, y))
 
     if memory_basis == "x":
-        x_checks = a_type
-        z_checks = b_type
+        x_sites = fam0
+        z_sites = fam1
     else:
-        z_checks = a_type
-        x_checks = b_type
+        z_sites = fam0
+        x_sites = fam1
 
-    return x_checks, z_checks
+    return x_sites, z_sites
 
 
-def _dense_syndrome_arrays_from_checks_single(detector_bits, x_checks, z_checks):
+def _build_worldline_groups(
+    detector_coords: Dict[int, Tuple[int, int, int]],
+    x_sites,
+    z_sites,
+):
     """
-    Build dense rectangular syndrome arrays sX, sZ and activity masks active_X, active_Z
-    for one shot.
+    Group detector ids by spatial stabilizer site across all times.
     """
-    all_x = sorted({x for _, x, _ in x_checks} | {x for _, x, _ in z_checks})
-    all_y = sorted({y for _, _, y in x_checks} | {y for _, _, y in z_checks})
+    x_groups = defaultdict(list)
+    z_groups = defaultdict(list)
+
+    for det_id, (x, y, t) in detector_coords.items():
+        xy = (x, y)
+        if xy in x_sites:
+            x_groups[xy].append((t, det_id))
+        elif xy in z_sites:
+            z_groups[xy].append((t, det_id))
+
+    # Sort by time for readability/debugging.
+    for groups in (x_groups, z_groups):
+        for xy in groups:
+            groups[xy].sort()
+            groups[xy] = [det_id for _, det_id in groups[xy]]
+
+    return x_groups, z_groups
+
+
+def _dense_syndrome_arrays_from_worldlines_single(detector_bits, x_groups, z_groups):
+    all_x = sorted({x for x, _ in x_groups.keys()} | {x for x, _ in z_groups.keys()})
+    all_y = sorted({y for _, y in x_groups.keys()} | {y for _, y in z_groups.keys()})
     x_to_col = {x: j for j, x in enumerate(all_x)}
     y_to_row = {y: i for i, y in enumerate(all_y)}
     shape = (len(all_y), len(all_x))
@@ -165,36 +186,30 @@ def _dense_syndrome_arrays_from_checks_single(detector_bits, x_checks, z_checks)
     active_X = np.zeros(shape, dtype=np.uint8)
     active_Z = np.zeros(shape, dtype=np.uint8)
 
-    for det_id, x, y in x_checks:
+    detector_bits = np.asarray(detector_bits, dtype=np.uint8)
+
+    for (x, y), det_ids in x_groups.items():
         i = y_to_row[y]
         j = x_to_col[x]
-        sX[i, j] = int(detector_bits[det_id])
+        sX[i, j] = np.bitwise_xor.reduce(detector_bits[det_ids]) if det_ids else 0
         active_X[i, j] = 1
 
-    for det_id, x, y in z_checks:
+    for (x, y), det_ids in z_groups.items():
         i = y_to_row[y]
         j = x_to_col[x]
-        sZ[i, j] = int(detector_bits[det_id])
+        sZ[i, j] = np.bitwise_xor.reduce(detector_bits[det_ids]) if det_ids else 0
         active_Z[i, j] = 1
 
     return sX, sZ, active_X, active_Z
 
 
-def _dense_syndrome_arrays_from_checks_batch(detector_bits_batch, x_checks, z_checks):
-    """
-    Batched version:
-        detector_bits_batch: (shots, num_detectors)
-
-    Returns:
-        sX, sZ, active_X, active_Z with shapes
-        (shots, nrow, ncol), (shots, nrow, ncol), (shots, nrow, ncol), (shots, nrow, ncol)
-    """
+def _dense_syndrome_arrays_from_worldlines_batch(detector_bits_batch, x_groups, z_groups):
     detector_bits_batch = np.asarray(detector_bits_batch, dtype=np.uint8)
     if detector_bits_batch.ndim != 2:
         raise ValueError("detector_bits_batch must have shape (shots, num_detectors).")
 
-    all_x = sorted({x for _, x, _ in x_checks} | {x for _, x, _ in z_checks})
-    all_y = sorted({y for _, _, y in x_checks} | {y for _, _, y in z_checks})
+    all_x = sorted({x for x, _ in x_groups.keys()} | {x for x, _ in z_groups.keys()})
+    all_y = sorted({y for _, y in x_groups.keys()} | {y for _, y in z_groups.keys()})
     x_to_col = {x: j for j, x in enumerate(all_x)}
     y_to_row = {y: i for i, y in enumerate(all_y)}
 
@@ -206,19 +221,133 @@ def _dense_syndrome_arrays_from_checks_batch(detector_bits_batch, x_checks, z_ch
     active_X = np.zeros(shape, dtype=np.uint8)
     active_Z = np.zeros(shape, dtype=np.uint8)
 
-    for det_id, x, y in x_checks:
+    for (x, y), det_ids in x_groups.items():
         i = y_to_row[y]
         j = x_to_col[x]
-        sX[:, i, j] = detector_bits_batch[:, det_id]
+        if det_ids:
+            sX[:, i, j] = np.bitwise_xor.reduce(detector_bits_batch[:, det_ids], axis=1)
         active_X[:, i, j] = 1
 
-    for det_id, x, y in z_checks:
+    for (x, y), det_ids in z_groups.items():
         i = y_to_row[y]
         j = x_to_col[x]
-        sZ[:, i, j] = detector_bits_batch[:, det_id]
+        if det_ids:
+            sZ[:, i, j] = np.bitwise_xor.reduce(detector_bits_batch[:, det_ids], axis=1)
         active_Z[:, i, j] = 1
 
     return sX, sZ, active_X, active_Z
+# def _split_check_types_from_coords(
+#     detector_coords: Dict[int, Tuple[int, int, int]],
+#     memory_basis: str = "x",
+#     target_t: int = 1,
+# ):
+#     """
+#     Split detectors on a chosen time slice into X-check and Z-check groups.
+
+#     Classification rule:
+#     sites appearing already at t=0 correspond to one stabilizer type; the
+#     complementary sites on the chosen later slice correspond to the other type.
+#     """
+#     if memory_basis not in ("x", "z"):
+#         raise ValueError("memory_basis must be 'x' or 'z'.")
+
+#     first_round_xy = {
+#         (x, y) for _, (x, y, t) in detector_coords.items() if t == 0
+#     }
+#     target_round = [
+#         (det_id, x, y)
+#         for det_id, (x, y, t) in detector_coords.items()
+#         if t == target_t
+#     ]
+
+#     a_type = []
+#     b_type = []
+#     for det_id, x, y in target_round:
+#         if (x, y) in first_round_xy:
+#             a_type.append((det_id, x, y))
+#         else:
+#             b_type.append((det_id, x, y))
+
+#     if memory_basis == "x":
+#         x_checks = a_type
+#         z_checks = b_type
+#     else:
+#         z_checks = a_type
+#         x_checks = b_type
+
+#     return x_checks, z_checks
+
+
+# def _dense_syndrome_arrays_from_checks_single(detector_bits, x_checks, z_checks):
+#     """
+#     Build dense rectangular syndrome arrays sX, sZ and activity masks active_X, active_Z
+#     for one shot.
+#     """
+#     all_x = sorted({x for _, x, _ in x_checks} | {x for _, x, _ in z_checks})
+#     all_y = sorted({y for _, _, y in x_checks} | {y for _, _, y in z_checks})
+#     x_to_col = {x: j for j, x in enumerate(all_x)}
+#     y_to_row = {y: i for i, y in enumerate(all_y)}
+#     shape = (len(all_y), len(all_x))
+
+#     sX = np.zeros(shape, dtype=np.uint8)
+#     sZ = np.zeros(shape, dtype=np.uint8)
+#     active_X = np.zeros(shape, dtype=np.uint8)
+#     active_Z = np.zeros(shape, dtype=np.uint8)
+
+#     for det_id, x, y in x_checks:
+#         i = y_to_row[y]
+#         j = x_to_col[x]
+#         sX[i, j] = int(detector_bits[det_id])
+#         active_X[i, j] = 1
+
+#     for det_id, x, y in z_checks:
+#         i = y_to_row[y]
+#         j = x_to_col[x]
+#         sZ[i, j] = int(detector_bits[det_id])
+#         active_Z[i, j] = 1
+
+#     return sX, sZ, active_X, active_Z
+
+
+# def _dense_syndrome_arrays_from_checks_batch(detector_bits_batch, x_checks, z_checks):
+#     """
+#     Batched version:
+#         detector_bits_batch: (shots, num_detectors)
+
+#     Returns:
+#         sX, sZ, active_X, active_Z with shapes
+#         (shots, nrow, ncol), (shots, nrow, ncol), (shots, nrow, ncol), (shots, nrow, ncol)
+#     """
+#     detector_bits_batch = np.asarray(detector_bits_batch, dtype=np.uint8)
+#     if detector_bits_batch.ndim != 2:
+#         raise ValueError("detector_bits_batch must have shape (shots, num_detectors).")
+
+#     all_x = sorted({x for _, x, _ in x_checks} | {x for _, x, _ in z_checks})
+#     all_y = sorted({y for _, _, y in x_checks} | {y for _, _, y in z_checks})
+#     x_to_col = {x: j for j, x in enumerate(all_x)}
+#     y_to_row = {y: i for i, y in enumerate(all_y)}
+
+#     shots = detector_bits_batch.shape[0]
+#     shape = (shots, len(all_y), len(all_x))
+
+#     sX = np.zeros(shape, dtype=np.uint8)
+#     sZ = np.zeros(shape, dtype=np.uint8)
+#     active_X = np.zeros(shape, dtype=np.uint8)
+#     active_Z = np.zeros(shape, dtype=np.uint8)
+
+#     for det_id, x, y in x_checks:
+#         i = y_to_row[y]
+#         j = x_to_col[x]
+#         sX[:, i, j] = detector_bits_batch[:, det_id]
+#         active_X[:, i, j] = 1
+
+#     for det_id, x, y in z_checks:
+#         i = y_to_row[y]
+#         j = x_to_col[x]
+#         sZ[:, i, j] = detector_bits_batch[:, det_id]
+#         active_Z[:, i, j] = 1
+
+#     return sX, sZ, active_X, active_Z
 
 
 # ---------------------------------------------------------------------------
@@ -273,16 +402,30 @@ def sample_surface_code_depolarizing_batch(
     observable_flips = np.asarray(obs, dtype=np.uint8)
 
     detector_coords = _rounded_detector_coords(circuit)
-    x_checks, z_checks = _split_check_types_from_coords(
+    x_sites, z_sites = _infer_spatial_families_from_all_coords(
         detector_coords=detector_coords,
         memory_basis=memory_basis,
-        target_t=target_t,
     )
-    sX, sZ, active_X, active_Z = _dense_syndrome_arrays_from_checks_batch(
+    x_groups, z_groups = _build_worldline_groups(
+        detector_coords=detector_coords,
+        x_sites=x_sites,
+        z_sites=z_sites,
+    )
+    sX, sZ, active_X, active_Z = _dense_syndrome_arrays_from_worldlines_batch(
         detector_bits_batch=detector_bits,
-        x_checks=x_checks,
-        z_checks=z_checks,
+        x_groups=x_groups,
+        z_groups=z_groups,
     )
+    # x_checks, z_checks = _split_check_types_from_coords(
+    #     detector_coords=detector_coords,
+    #     memory_basis=memory_basis,
+    #     target_t=target_t,
+    # )
+    # sX, sZ, active_X, active_Z = _dense_syndrome_arrays_from_checks_batch(
+    #     detector_bits_batch=detector_bits,
+    #     x_checks=x_checks,
+    #     z_checks=z_checks,
+    # )
 
     return StimSurfaceBatchSample(
         circuit=circuit,
