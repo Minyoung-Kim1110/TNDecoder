@@ -15,23 +15,43 @@ PAULI_TO_XZ = {"I": (0, 0),
 
 def _build_face_tensor(
     row: int,
-    col: int, # location of plaquette 
+    col: int,
     sX: np.ndarray,
-    sZ: np.ndarray, # syndrome measurements 
+    sZ: np.ndarray,
     W_h: np.ndarray,
-    W_v: np.ndarray, # weights to each edges 
+    W_v: np.ndarray,
     active_X: np.ndarray,
-    active_Z: np.ndarray, # masks 
+    active_Z: np.ndarray,
 ):
     r"""
-    Build one local tensor on a rectangular face grid, but only enforce:
-      - X-check syndrome if active_X[row,col] == 1
-      - Z-check syndrome if active_Z[row,col] == 1
+    Build one local tensor for the dense 9×9 CSS-syndrome grid.
 
-    Conventions inherited from your existing code:
-      - horizontal edges: W_h[row, col] (top), W_h[row+1, col] (bottom)
-      - vertical edges:   W_v[row, col] (left), W_v[row, col+1] (right)
-      - bond state flattening: idx = 2*x + z
+    The grid mixes two node types:
+
+    DATA QUBIT NODE  (active_X == 0 and active_Z == 0)
+        A Pauli error P on the qubit must be seen consistently by every
+        adjacent check.  Implemented as a DELTA tensor:
+
+            T[l, u, d, r] = W_data[x_P, z_P]
+                            if all interior (non-boundary) bond indices
+                            encode the same Pauli P,  else 0.
+
+        Full weight W placed here; check tensors carry no weight.
+
+    CHECK NODE  (active_X == 1 or active_Z == 1)
+        Enforces the CSS parity constraint.  No weight (lives in data
+        qubit tensors).  Boundary bonds (dim == 1) are pinned to the
+        "no error" state (x=0, z=0) — there is no qubit at the code edge.
+
+    Bond index convention:  idx = 2*x + z
+        0 → I (x=0, z=0)
+        1 → Z (x=0, z=1)
+        2 → X (x=1, z=0)
+        3 → Y (x=1, z=1)
+
+    Syndrome parity convention:
+        X-check syndrome sX  ←  Z-parity of incident bonds  (zu^zd^zl^zr)
+        Z-check syndrome sZ  ←  X-parity of incident bonds  (xu^xd^xl^xr)
     """
     sx = int(sX[row, col])
     sz = int(sZ[row, col])
@@ -47,51 +67,89 @@ def _build_face_tensor(
 
     T = np.zeros((Dl, Du, Dd, Dr), dtype=np.float64)
 
-    Wu = W_h[row, col]
-    Wd = W_h[row + 1, col]
-    Wl = W_v[row, col]
-    Wr = W_v[row, col + 1]
-
     def idx_to_xz(idx: int):
         return idx // 2, idx % 2
 
-    all_states = [(0, 0), (0, 1), (1, 0), (1, 1)]
+    if not ax and not az:
+        # ----------------------------------------------------------------
+        # DATA QUBIT NODE — delta tensor
+        #
+        # All interior bonds must carry the same Pauli error (x, z).
+        # T[l, u, d, r] = W_data[x, z]  when all interior indices agree,
+        #                = 0             otherwise.
+        #
+        # Boundary bonds (dim == 1) have index 0 and carry no information;
+        # they are excluded from the delta condition.
+        #
+        # VACANCY positions (col-odd AND row-odd in the dense grid) are
+        # not real qubits in the unrotated surface code.  The dense grid
+        # includes them because both odd-x and odd-y coordinates arise
+        # from distinct check types.  Treating vacancies as real qubits
+        # would create spurious connections between checks and add fake
+        # probability mass.  Fix: force identity (W[0,0]=1, rest=0) so
+        # that every bond at a vacancy is pinned to index 0 (I), making
+        # the vacancy transparent to the surrounding checks.
+        #
+        # Convention valid for unrotated surface code where
+        # x_to_col and y_to_row are identity maps (all integers 0..2d-2
+        # appear in check coordinates), so col = physical_x and
+        # row = physical_y.
+        # ----------------------------------------------------------------
+        is_vacancy = (row % 2 == 1) and (col % 2 == 1)
+        if is_vacancy:
+            W_data = np.zeros((2, 2), dtype=np.float64)
+            W_data[0, 0] = 1.0   # identity only — no qubit at this site
+        else:
+            W_data = W_h[row, col]
 
-    for l in range(Dl):
-        left_states = all_states if Dl == 1 else [idx_to_xz(l)]
-        for u in range(Du):
-            up_states = all_states if Du == 1 else [idx_to_xz(u)]
-            for d in range(Dd):
-                down_states = all_states if Dd == 1 else [idx_to_xz(d)]
-                for r in range(Dr):
-                    right_states = all_states if Dr == 1 else [idx_to_xz(r)]
+        for l in range(Dl):
+            for u in range(Du):
+                for d in range(Dd):
+                    for r in range(Dr):
+                        interior = []
+                        if Dl > 1: interior.append(l)
+                        if Du > 1: interior.append(u)
+                        if Dd > 1: interior.append(d)
+                        if Dr > 1: interior.append(r)
 
-                    val = 0.0
+                        if not interior:
+                            T[l, u, d, r] = 1.0
+                            continue
 
-                    for xl, zl in left_states:
-                        for xu, zu in up_states:
-                            for xd, zd in down_states:
-                                for xr, zr in right_states:
-                                    # Existing convention in your code:
-                                    # X-check syndrome comes from Z-parity on incident edges
-                                    # Z-check syndrome comes from X-parity on incident edges
-                                    parity_for_Xcheck = zu ^ zd ^ zl ^ zr
-                                    parity_for_Zcheck = xu ^ xd ^ xl ^ xr
+                        # Delta condition
+                        if len(set(interior)) > 1:
+                            continue  # mismatched Paulis → 0
 
-                                    if ax and parity_for_Xcheck != sx:
-                                        continue
-                                    if az and parity_for_Zcheck != sz:
-                                        continue
+                        xq, zq = idx_to_xz(interior[0])
+                        T[l, u, d, r] = W_data[xq, zq]
 
-                                    weight = 1.0
-                                    weight *= np.sqrt(Wl[xl, zl]) if Dl != 1 else Wl[xl, zl]
-                                    weight *= np.sqrt(Wu[xu, zu]) if Du != 1 else Wu[xu, zu]
-                                    weight *= np.sqrt(Wd[xd, zd]) if Dd != 1 else Wd[xd, zd]
-                                    weight *= np.sqrt(Wr[xr, zr]) if Dr != 1 else Wr[xr, zr]
+    else:
+        # ----------------------------------------------------------------
+        # ACTIVE CHECK NODE — syndrome constraint, no weight
+        #
+        # Boundary bonds (dim == 1) are pinned to (x=0, z=0):
+        # there is no data qubit outside the code boundary.
+        # Interior bonds enforce the CSS parity condition.
+        # Weight is carried entirely by the data qubit tensors.
+        # ----------------------------------------------------------------
+        for l in range(Dl):
+            for u in range(Du):
+                for d in range(Dd):
+                    for r in range(Dr):
+                        xl, zl = (0, 0) if Dl == 1 else idx_to_xz(l)
+                        xu, zu = (0, 0) if Du == 1 else idx_to_xz(u)
+                        xd, zd = (0, 0) if Dd == 1 else idx_to_xz(d)
+                        xr, zr = (0, 0) if Dr == 1 else idx_to_xz(r)
 
-                                    val += weight
+                        parity_for_Xcheck = zu ^ zd ^ zl ^ zr
+                        parity_for_Zcheck = xu ^ xd ^ xl ^ xr
 
-                    T[l, u, d, r] = val
+                        if ax and parity_for_Xcheck != sx:
+                            continue
+                        if az and parity_for_Zcheck != sz:
+                            continue
+
+                        T[l, u, d, r] = 1.0
 
     return T
 
