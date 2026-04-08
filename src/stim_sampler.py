@@ -128,21 +128,30 @@ def _infer_spatial_families_from_all_coords(
 
     spatial_sites = sorted({(x, y) for _, (x, y, _) in detector_coords.items()})
 
-    fam0 = set()
-    fam1 = set()
+    # In Stim's unrotated surface code ALL check qubits have (x+y)%2==1,
+    # so a (x+y) checkerboard cannot separate X-checks from Z-checks.
+    # The correct split is by which individual coordinate is odd:
+    #   x odd, y even  →  one check type
+    #   x even, y odd  →  the other check type
+    #
+    # Verified empirically (debug_single_data_error_mapping.py):
+    #   Z error fires detectors at x_odd, y_even positions
+    #   → those are X-type checks for memory_x.
+    xodd_yeven = set()
+    xeven_yodd = set()
     for x, y in spatial_sites:
-        # Provisional checkerboard split. Verify once with the debug script below.
-        if (x + y) % 2 == 0:
-            fam0.add((x, y))
-        else:
-            fam1.add((x, y))
+        if x % 2 == 1 and y % 2 == 0:
+            xodd_yeven.add((x, y))
+        elif x % 2 == 0 and y % 2 == 1:
+            xeven_yodd.add((x, y))
+        # positions with both-even or both-odd coords are data qubits, skip
 
     if memory_basis == "x":
-        x_sites = fam0
-        z_sites = fam1
+        x_sites = xodd_yeven   # X-checks: x odd, y even
+        z_sites = xeven_yodd   # Z-checks: x even, y odd
     else:
-        z_sites = fam0
-        x_sites = fam1
+        z_sites = xodd_yeven
+        x_sites = xeven_yodd
 
     return x_sites, z_sites
 
