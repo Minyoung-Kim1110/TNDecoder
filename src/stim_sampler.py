@@ -1,7 +1,7 @@
 import numpy as np
 import stim
 
-from typing import Dict, Tuple, Iterator
+from typing import Dict, Optional, Tuple, Iterator
 from dataclasses import dataclass
 
 
