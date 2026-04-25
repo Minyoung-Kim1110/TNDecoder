@@ -72,6 +72,27 @@ def _build_face_tensor(
 
     if not ax and not az:
         # ----------------------------------------------------------------
+        # Check-type site with no active check → transparent tensor.
+        #
+        # Coordinate parity in the dense (2d-1)×(2d-1) grid:
+        #   col%2==1, row%2==0  →  X-check site
+        #   col%2==0, row%2==1  →  Z-check site
+        #   otherwise           →  data qubit site
+        #
+        # When a check-type position has active=0 the syndrome was not
+        # measured (e.g. Z-checks in memory_x rounds=1).  The correct ML
+        # treatment is to marginalise over both possible syndromes, which
+        # is achieved by a transparent tensor: T=1 everywhere.  This lets
+        # the x- or z-parity of neighbouring bonds contract freely so the
+        # unobserved check contributes no constraint.
+        # ----------------------------------------------------------------
+        is_x_check_site = (col % 2 == 1) and (row % 2 == 0)
+        is_z_check_site = (col % 2 == 0) and (row % 2 == 1)
+        if is_x_check_site or is_z_check_site:
+            T[:] = 1.0
+            return T
+
+        # ----------------------------------------------------------------
         # DATA QUBIT NODE — delta tensor
         #
         # All interior bonds must carry the same Pauli error (x, z).
@@ -81,26 +102,15 @@ def _build_face_tensor(
         # Boundary bonds (dim == 1) have index 0 and carry no information;
         # they are excluded from the delta condition.
         #
-        # VACANCY positions (col-odd AND row-odd in the dense grid) are
-        # not real qubits in the unrotated surface code.  The dense grid
-        # includes them because both odd-x and odd-y coordinates arise
-        # from distinct check types.  Treating vacancies as real qubits
-        # would create spurious connections between checks and add fake
-        # probability mass.  Fix: force identity (W[0,0]=1, rest=0) so
-        # that every bond at a vacancy is pinned to index 0 (I), making
-        # the vacancy transparent to the surrounding checks.
+        # All non-check positions are real data qubits.
         #
-        # Convention valid for unrotated surface code where
-        # x_to_col and y_to_row are identity maps (all integers 0..2d-2
-        # appear in check coordinates), so col = physical_x and
-        # row = physical_y.
+        # The unrotated surface code has 2d²-2d+1 data qubits, NOT d².
+        # In the dense (2d-1)×(2d-1) grid:
+        #   - (row_even, col_even): data qubits at (x_even, y_even)  — 5×5=25 for d=5
+        #   - (row_odd,  col_odd):  data qubits at (x_odd,  y_odd)   — 4×4=16 for d=5
+        # Both families are real qubits with errors and weights.
         # ----------------------------------------------------------------
-        is_vacancy = (row % 2 == 1) and (col % 2 == 1)
-        if is_vacancy:
-            W_data = np.zeros((2, 2), dtype=np.float64)
-            W_data[0, 0] = 1.0   # identity only — no qubit at this site
-        else:
-            W_data = W_h[row, col]
+        W_data = W_h[row, col]
 
         for l in range(Dl):
             for u in range(Du):
@@ -205,42 +215,67 @@ def build_pauli_peps(
 
     return T
 
-# Logical coset twists 
-def _twist_vertical_cut_x(T, cut_col):
-    """
-    Insert (-1)^x on the vertical cut, matching the convention in PEPS_Pauli_decoder.
-    """
-    nrow = len(T)
-    ncol = len(T[0])
-    if not (1 <= cut_col <= ncol - 1):
-        raise ValueError(f"cut_col must satisfy 1 <= cut_col <= {ncol-1}")
+# Logical coset twists
+#
+# Stim unrotated surface code (memory_x):
+#   Logical X = VERTICAL column of X operators (fixed stim_x, varying stim_y)
+#   Logical Z = HORIZONTAL row of Z operators (fixed stim_y, varying stim_x)
+#
+# To detect a VERTICAL logical X string we need a HORIZONTAL seam:
+#   insert (-1)^x on DOWN bonds crossing the seam (row cut_row-1 → cut_row).
+# To detect a HORIZONTAL logical Z string we need a VERTICAL seam:
+#   insert (-1)^z on RIGHT bonds crossing the seam (col cut_col-1 → cut_col).
+#
+# Tensor axis order: (left, up, down, right)
+# Bond index encoding: idx = 2*x_pauli + z_pauli  →  I=0, Z=1, X=2, Y=3
 
-    T_tw = [[np.array(A, copy=True) for A in row] for row in T]
-    c_left = cut_col - 1
-    for r in range(nrow):
-        A = T_tw[r][c_left]
-        A[..., 2] *= -1.0
-        A[..., 3] *= -1.0
-        T_tw[r][c_left] = A
-    return T_tw
+def _twist_horizontal_cut_x(T, cut_row):
+    """Insert (-1)^x on DOWN bonds at the horizontal seam below row cut_row-1.
 
-
-def _twist_horizontal_cut_z(T, cut_row):
-    """
-    Insert (-1)^z on the horizontal cut, matching the convention in PEPS_Pauli_decoder.
+    Only twists data qubit nodes (skip X-check sites at odd cols in an even row).
+    In the (2d-1)x(2d-1) PEPS grid, data qubits in row r_up are at columns
+    where c%2 == r_up%2.  X-check sites (col%2==1, row%2==0) would otherwise
+    propagate the sign to neighbouring diagonal data qubits, computing the
+    character for the wrong logical representative.
     """
     nrow = len(T)
     ncol = len(T[0])
     if not (1 <= cut_row <= nrow - 1):
         raise ValueError(f"cut_row must satisfy 1 <= cut_row <= {nrow-1}")
-
     T_tw = [[np.array(A, copy=True) for A in row] for row in T]
     r_up = cut_row - 1
     for c in range(ncol):
+        if c % 2 != r_up % 2:  # skip check sites
+            continue
         A = T_tw[r_up][c]
-        A[:, :, 1, :] *= -1.0
-        A[:, :, 3, :] *= -1.0
+        A[:, :, 2, :] *= -1.0  # DOWN bond X (x=1, z=0)
+        A[:, :, 3, :] *= -1.0  # DOWN bond Y (x=1, z=1)
         T_tw[r_up][c] = A
+    return T_tw
+
+
+def _twist_vertical_cut_z(T, cut_col):
+    """Insert (-1)^z on RIGHT bonds at the vertical seam right of col cut_col-1.
+
+    Only twists data qubit nodes (skip Z-check sites at odd rows in an even col).
+    In the (2d-1)x(2d-1) PEPS grid, data qubits in col c_left are at rows where
+    r%2 == c_left%2.  Z-check sites (col%2==0, row%2==1) would otherwise propagate
+    the sign to neighbouring diagonal data qubits, computing the character for the
+    wrong logical representative.
+    """
+    nrow = len(T)
+    ncol = len(T[0])
+    if not (1 <= cut_col <= ncol - 1):
+        raise ValueError(f"cut_col must satisfy 1 <= cut_col <= {ncol-1}")
+    T_tw = [[np.array(A, copy=True) for A in row] for row in T]
+    c_left = cut_col - 1
+    for r in range(nrow):
+        if r % 2 != c_left % 2:  # skip check sites
+            continue
+        A = T_tw[r][c_left]
+        A[..., 1] *= -1.0  # RIGHT bond Z (x=0, z=1)
+        A[..., 3] *= -1.0  # RIGHT bond Y (x=1, z=1)
+        T_tw[r][c_left] = A
     return T_tw
 
 
@@ -248,42 +283,38 @@ def _contract_with_optional_twists(
     T,
     *,
     twist_x=False,
-    cut_col=None,
+    cut_x=None,   # row index: horizontal seam for vertical X-string detection
     twist_z=False,
-    cut_row=None,
+    cut_z=None,   # col index: vertical seam for horizontal Z-string detection
     Nkeep=128,
     Nsweep=1,
 ):
     T_work = [[np.array(A, copy=True) for A in row] for row in T]
     if twist_x:
-        T_work = _twist_vertical_cut_x(T_work, cut_col=cut_col)
+        T_work = _twist_horizontal_cut_x(T_work, cut_row=cut_x)
     if twist_z:
-        T_work = _twist_horizontal_cut_z(T_work, cut_row=cut_row)
+        T_work = _twist_vertical_cut_z(T_work, cut_col=cut_z)
     val = contract_finPEPS(T_work, Nkeep=Nkeep, Nsweep=Nsweep)
     return float(np.real_if_close(val))
 
 
 def choose_default_logical_cuts(active_X: np.ndarray, active_Z: np.ndarray):
     """
-    Choose simple middle cuts in the dense rectangular embedding.
+    Choose boundary-adjacent seam cuts for the dense rectangular PEPS.
 
-    For now:
-      - logical X cut: vertical cut near the middle active columns
-      - logical Z cut: horizontal cut near the middle active rows
+    For the unrotated surface code (memory_x) in the (2d-1)×(2d-1) PEPS grid:
+      - Logical Z = HORIZONTAL row of Z at row=0 (stim_x=0 column in stim coords).
+        Detected by a VERTICAL seam (cut_col=1): Z/Y-parity of RIGHT bonds of col=0.
+      - Logical X = VERTICAL column of X at col=0 (stim_y=0 row in stim coords).
+        Detected by a HORIZONTAL seam (cut_row=1): X/Y-parity of DOWN bonds of row=0.
+
+    For open-boundary surface codes the seam must be placed adjacent to the
+    boundary where the logical operator is supported (cut=1), NOT at the middle.
+    A middle seam (cut≈d) is only valid for torus topology.
     """
-    active_any = (active_X | active_Z).astype(bool)
-    rows = np.where(active_any.any(axis=1))[0]
-    cols = np.where(active_any.any(axis=0))[0]
-    if len(rows) == 0 or len(cols) == 0:
-        raise ValueError("No active stabilizer support found.")
-
-    # Choose cuts between rows/cols, so convert active extent into an interior cut.
-    cmin, cmax = int(cols[0]), int(cols[-1])
-    rmin, rmax = int(rows[0]), int(rows[-1])
-
-    cut_col = max(1, min((cmin + cmax + 1) // 2, active_any.shape[1] - 1))
-    cut_row = max(1, min((rmin + rmax + 1) // 2, active_any.shape[0] - 1))
-
+    nrow, ncol = active_X.shape
+    cut_col = 1
+    cut_row = 1
     return cut_col, cut_row
 
 def pauli_coset_likelihoods_peps(
@@ -317,19 +348,22 @@ def pauli_coset_likelihoods_peps(
         if logical_z_cut_row is None:
             logical_z_cut_row = default_row
 
+    # logical_x_cut_col is used as the row index for the horizontal x-seam
+    # logical_z_cut_row is used as the col index for the vertical z-seam
+    # (values coincide for square symmetric codes; naming preserved for API compat)
     plain = _contract_with_optional_twists(T, Nkeep=Nkeep, Nsweep=Nsweep)
     zx = _contract_with_optional_twists(
-        T, twist_x=True, cut_col=logical_x_cut_col, Nkeep=Nkeep, Nsweep=Nsweep
+        T, twist_x=True, cut_x=logical_x_cut_col, Nkeep=Nkeep, Nsweep=Nsweep
     )
     zz = _contract_with_optional_twists(
-        T, twist_z=True, cut_row=logical_z_cut_row, Nkeep=Nkeep, Nsweep=Nsweep
+        T, twist_z=True, cut_z=logical_z_cut_row, Nkeep=Nkeep, Nsweep=Nsweep
     )
     zxz = _contract_with_optional_twists(
         T,
         twist_x=True,
-        cut_col=logical_x_cut_col,
+        cut_x=logical_x_cut_col,
         twist_z=True,
-        cut_row=logical_z_cut_row,
+        cut_z=logical_z_cut_row,
         Nkeep=Nkeep,
         Nsweep=Nsweep,
     )

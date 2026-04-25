@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from typing import Optional
+from typing import Dict, Optional, Tuple
 
 import numpy as np
 import stim
@@ -11,6 +11,13 @@ from .stim_sampler import (
     make_unrotated_sc_depolarizing_capacity_circuit,
     sample_surface_code_depolarizing,
     sample_surface_code_depolarizing_batch,
+    generate_local_p_map,
+    sample_surface_code_local_depolarizing_batch,
+    generate_spin_qubit_pz_map,
+    sample_surface_code_spin_qubit_batch,
+    EOQubitPMaps,
+    generate_eo_qubit_p_maps,
+    sample_surface_code_eo_qubit_batch,
 )
 
 
@@ -380,6 +387,432 @@ def run_surface_code_mwpm_full_logical(
     return SurfaceCodeMWPMFullLogicalResult(
         result_x_basis=result_x,
         result_z_basis=result_z,
+    )
+
+
+@dataclass
+class SurfaceCodeMWPMLocalFullLogicalResult:
+    """
+    Full logical MWPM result under a shared spatially inhomogeneous p-map.
+    """
+
+    result_x_basis: SurfaceCodeMWPMBatchResult
+    result_z_basis: SurfaceCodeMWPMBatchResult
+    p_map: Dict[Tuple[int, int], float]
+
+    @property
+    def p_L_Z(self) -> float:
+        return self.result_x_basis.logical_error_rate
+
+    @property
+    def p_L_X(self) -> float:
+        return self.result_z_basis.logical_error_rate
+
+    @property
+    def logical_error_rate(self) -> float:
+        return 1.0 - (1.0 - self.p_L_X) * (1.0 - self.p_L_Z)
+
+
+def run_surface_code_mwpm_batch_local(
+    *,
+    distance: int,
+    p_map: Dict[Tuple[int, int], float],
+    shots: int,
+    memory_basis: str = "x",
+    rounds: int = 3,
+    target_t: int = 1,
+    p_fallback: float = 0.0,
+    reference_p: float = 1e-3,
+    clip_eps: float = 1e-12,
+    decompose_errors: bool = True,
+    enable_correlations: bool = False,
+    return_weights: bool = False,
+    **dem_kwargs,
+) -> SurfaceCodeMWPMBatchResult:
+    """
+    Generate a fresh local-noise batch and decode it with DEM-based MWPM.
+    """
+    batch = sample_surface_code_local_depolarizing_batch(
+        distance=distance,
+        p_map=p_map,
+        shots=shots,
+        memory_basis=memory_basis,
+        rounds=rounds,
+        target_t=target_t,
+        p_fallback=p_fallback,
+        reference_p=reference_p,
+        clip_eps=clip_eps,
+    )
+    return decode_stim_surface_batch_with_mwpm(
+        batch,
+        decompose_errors=decompose_errors,
+        enable_correlations=enable_correlations,
+        return_weights=return_weights,
+        **dem_kwargs,
+    )
+
+
+def run_surface_code_mwpm_full_logical_local(
+    *,
+    distance: int,
+    p_map: Dict[Tuple[int, int], float],
+    shots: int,
+    rounds: int = 3,
+    target_t: int = 1,
+    p_fallback: float = 0.0,
+    reference_p: float = 1e-3,
+    clip_eps: float = 1e-12,
+    decompose_errors: bool = True,
+    enable_correlations: bool = False,
+    **dem_kwargs,
+) -> SurfaceCodeMWPMLocalFullLogicalResult:
+    """
+    Full logical MWPM using the same physical p-map in memory_x and memory_z.
+    """
+    result_x = run_surface_code_mwpm_batch_local(
+        distance=distance,
+        p_map=p_map,
+        shots=shots,
+        memory_basis="x",
+        rounds=rounds,
+        target_t=target_t,
+        p_fallback=p_fallback,
+        reference_p=reference_p,
+        clip_eps=clip_eps,
+        decompose_errors=decompose_errors,
+        enable_correlations=enable_correlations,
+        **dem_kwargs,
+    )
+    result_z = run_surface_code_mwpm_batch_local(
+        distance=distance,
+        p_map=p_map,
+        shots=shots,
+        memory_basis="z",
+        rounds=rounds,
+        target_t=target_t,
+        p_fallback=p_fallback,
+        reference_p=reference_p,
+        clip_eps=clip_eps,
+        decompose_errors=decompose_errors,
+        enable_correlations=enable_correlations,
+        **dem_kwargs,
+    )
+    return SurfaceCodeMWPMLocalFullLogicalResult(
+        result_x_basis=result_x,
+        result_z_basis=result_z,
+        p_map=p_map,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Spin qubit — Z dephasing MWPM runners
+# ---------------------------------------------------------------------------
+
+@dataclass
+class SurfaceCodeMWPMSpinQubitResult:
+    """
+    MWPM result for spin qubit (Z dephasing only).
+    Only memory_x is meaningful; Z errors cause Z-logical failures only.
+    """
+    result_x_basis: SurfaceCodeMWPMBatchResult
+    pz_map: Dict[Tuple[int, int], float]
+
+    @property
+    def logical_error_rate(self) -> float:
+        return self.result_x_basis.logical_error_rate
+
+
+def run_surface_code_mwpm_spin_qubit(
+    *,
+    distance: int,
+    pz_map: Dict[Tuple[int, int], float],
+    shots: int,
+    rounds: int = 3,
+    p_fallback: float = 0.0,
+    reference_p: float = 1e-3,
+    clip_eps: float = 1e-12,
+    decompose_errors: bool = True,
+    enable_correlations: bool = False,
+    **dem_kwargs,
+) -> SurfaceCodeMWPMSpinQubitResult:
+    """MWPM for spin qubit noise (Z dephasing). Runs memory_x only."""
+    batch = sample_surface_code_spin_qubit_batch(
+        distance=distance,
+        pz_map=pz_map,
+        shots=shots,
+        memory_basis="x",
+        rounds=rounds,
+        p_fallback=p_fallback,
+        reference_p=reference_p,
+        clip_eps=clip_eps,
+    )
+    result_x = decode_stim_surface_batch_with_mwpm(
+        batch,
+        decompose_errors=decompose_errors,
+        enable_correlations=enable_correlations,
+        **dem_kwargs,
+    )
+    return SurfaceCodeMWPMSpinQubitResult(result_x_basis=result_x, pz_map=pz_map)
+
+
+def run_surface_code_mwpm_spin_qubit_from_normal(
+    *,
+    distance: int,
+    p_mean: float,
+    sigma_frac: float,
+    shots: int,
+    rounds: int = 3,
+    seed: Optional[int] = None,
+    p_fallback: float = 0.0,
+    reference_p: float = 1e-3,
+    clip_eps: float = 1e-12,
+    decompose_errors: bool = True,
+    enable_correlations: bool = False,
+    **dem_kwargs,
+) -> SurfaceCodeMWPMSpinQubitResult:
+    """Draw a Gaussian pz_map and run MWPM for spin qubit noise."""
+    pz_map = generate_spin_qubit_pz_map(
+        distance=distance,
+        p_mean=p_mean,
+        sigma_frac=sigma_frac,
+        memory_basis="x",
+        rounds=rounds,
+        seed=seed,
+        reference_p=reference_p,
+    )
+    return run_surface_code_mwpm_spin_qubit(
+        distance=distance,
+        pz_map=pz_map,
+        shots=shots,
+        rounds=rounds,
+        p_fallback=p_fallback,
+        reference_p=reference_p,
+        clip_eps=clip_eps,
+        decompose_errors=decompose_errors,
+        enable_correlations=enable_correlations,
+        **dem_kwargs,
+    )
+
+
+def run_surface_code_mwpm_spin_qubit_uniform(
+    *,
+    distance: int,
+    p: float,
+    shots: int,
+    rounds: int = 3,
+    reference_p: float = 1e-3,
+    clip_eps: float = 1e-12,
+    decompose_errors: bool = True,
+    enable_correlations: bool = False,
+    **dem_kwargs,
+) -> SurfaceCodeMWPMSpinQubitResult:
+    """Uniform Z dephasing baseline: all qubits at rate p."""
+    pz_map = generate_spin_qubit_pz_map(
+        distance=distance, p_mean=p, sigma_frac=0.0,
+        memory_basis="x", rounds=rounds, reference_p=reference_p,
+    )
+    return run_surface_code_mwpm_spin_qubit(
+        distance=distance, pz_map=pz_map, shots=shots, rounds=rounds,
+        p_fallback=0.0, reference_p=reference_p, clip_eps=clip_eps,
+        decompose_errors=decompose_errors, enable_correlations=enable_correlations,
+        **dem_kwargs,
+    )
+
+
+# ---------------------------------------------------------------------------
+# EO qubit — PAULI_CHANNEL_1(px, 0, pz) MWPM runners
+# ---------------------------------------------------------------------------
+
+@dataclass
+class SurfaceCodeMWPMEOQubitResult:
+    """
+    Full logical MWPM result for EO qubit (biased X+Z noise).
+    memory_x → Z-logical failures; memory_z → X-logical failures.
+    """
+    result_x_basis: SurfaceCodeMWPMBatchResult
+    result_z_basis: SurfaceCodeMWPMBatchResult
+    p_maps: EOQubitPMaps
+
+    @property
+    def p_L_Z(self) -> float:
+        return self.result_x_basis.logical_error_rate
+
+    @property
+    def p_L_X(self) -> float:
+        return self.result_z_basis.logical_error_rate
+
+    @property
+    def logical_error_rate(self) -> float:
+        return 1.0 - (1.0 - self.p_L_X) * (1.0 - self.p_L_Z)
+
+
+def run_surface_code_mwpm_eo_qubit(
+    *,
+    distance: int,
+    p_maps: EOQubitPMaps,
+    shots: int,
+    rounds: int = 3,
+    p_fallback_x: float = 0.0,
+    p_fallback_z: float = 0.0,
+    reference_p: float = 1e-3,
+    clip_eps: float = 1e-12,
+    decompose_errors: bool = True,
+    enable_correlations: bool = False,
+    approximate_disjoint_errors: bool = True,
+    **dem_kwargs,
+) -> SurfaceCodeMWPMEOQubitResult:
+    """MWPM for EO qubit noise. Runs memory_x and memory_z with shared p_maps."""
+    dem_kwargs.setdefault('approximate_disjoint_errors', approximate_disjoint_errors)
+    batch_x = sample_surface_code_eo_qubit_batch(
+        distance=distance,
+        px_map=p_maps.px_map,
+        pz_map=p_maps.pz_map,
+        shots=shots,
+        memory_basis="x",
+        rounds=rounds,
+        p_fallback_x=p_fallback_x,
+        p_fallback_z=p_fallback_z,
+        reference_p=reference_p,
+        clip_eps=clip_eps,
+    )
+    batch_z = sample_surface_code_eo_qubit_batch(
+        distance=distance,
+        px_map=p_maps.px_map,
+        pz_map=p_maps.pz_map,
+        shots=shots,
+        memory_basis="z",
+        rounds=rounds,
+        p_fallback_x=p_fallback_x,
+        p_fallback_z=p_fallback_z,
+        reference_p=reference_p,
+        clip_eps=clip_eps,
+    )
+    result_x = decode_stim_surface_batch_with_mwpm(
+        batch_x, decompose_errors=decompose_errors,
+        enable_correlations=enable_correlations, **dem_kwargs,
+    )
+    result_z = decode_stim_surface_batch_with_mwpm(
+        batch_z, decompose_errors=decompose_errors,
+        enable_correlations=enable_correlations, **dem_kwargs,
+    )
+    return SurfaceCodeMWPMEOQubitResult(
+        result_x_basis=result_x, result_z_basis=result_z, p_maps=p_maps,
+    )
+
+
+def run_surface_code_mwpm_eo_qubit_from_normal(
+    *,
+    distance: int,
+    p_mean_z: float,
+    sigma_frac_z: float,
+    p_mean_n: float,
+    sigma_frac_n: float,
+    shots: int,
+    rounds: int = 3,
+    seed: Optional[int] = None,
+    p_fallback_x: float = 0.0,
+    p_fallback_z: float = 0.0,
+    reference_p: float = 1e-3,
+    clip_eps: float = 1e-12,
+    decompose_errors: bool = True,
+    enable_correlations: bool = False,
+    **dem_kwargs,
+) -> SurfaceCodeMWPMEOQubitResult:
+    """Draw independent Gaussian p_maps and run MWPM for EO qubit noise."""
+    p_maps = generate_eo_qubit_p_maps(
+        distance=distance,
+        p_mean_z=p_mean_z,
+        sigma_frac_z=sigma_frac_z,
+        p_mean_n=p_mean_n,
+        sigma_frac_n=sigma_frac_n,
+        memory_basis="x",
+        rounds=rounds,
+        seed=seed,
+        reference_p=reference_p,
+    )
+    return run_surface_code_mwpm_eo_qubit(
+        distance=distance,
+        p_maps=p_maps,
+        shots=shots,
+        rounds=rounds,
+        p_fallback_x=p_fallback_x,
+        p_fallback_z=p_fallback_z,
+        reference_p=reference_p,
+        clip_eps=clip_eps,
+        decompose_errors=decompose_errors,
+        enable_correlations=enable_correlations,
+        **dem_kwargs,
+    )
+
+
+def run_surface_code_mwpm_eo_qubit_uniform(
+    *,
+    distance: int,
+    p_mean_z: float,
+    p_mean_n: float,
+    shots: int,
+    rounds: int = 3,
+    reference_p: float = 1e-3,
+    clip_eps: float = 1e-12,
+    decompose_errors: bool = True,
+    enable_correlations: bool = False,
+    **dem_kwargs,
+) -> SurfaceCodeMWPMEOQubitResult:
+    """Uniform EO qubit baseline: all qubits at axis rates (p_mean_z, p_mean_n)."""
+    p_maps = generate_eo_qubit_p_maps(
+        distance=distance,
+        p_mean_z=p_mean_z, sigma_frac_z=0.0,
+        p_mean_n=p_mean_n, sigma_frac_n=0.0,
+        memory_basis="x", rounds=rounds, reference_p=reference_p,
+    )
+    return run_surface_code_mwpm_eo_qubit(
+        distance=distance, p_maps=p_maps, shots=shots, rounds=rounds,
+        reference_p=reference_p, clip_eps=clip_eps,
+        decompose_errors=decompose_errors, enable_correlations=enable_correlations,
+        **dem_kwargs,
+    )
+
+
+def run_surface_code_mwpm_full_logical_local_from_normal(
+    *,
+    distance: int,
+    p_mean: float,
+    sigma_frac: float,
+    shots: int,
+    rounds: int = 3,
+    target_t: int = 1,
+    seed: Optional[int] = None,
+    p_fallback: float = 0.0,
+    reference_p: float = 1e-3,
+    clip_eps: float = 1e-12,
+    decompose_errors: bool = True,
+    enable_correlations: bool = False,
+    **dem_kwargs,
+) -> SurfaceCodeMWPMLocalFullLogicalResult:
+    """
+    Draw one shared Gaussian p-map and run full logical MWPM.
+    """
+    p_map = generate_local_p_map(
+        distance=distance,
+        p_mean=p_mean,
+        sigma_frac=sigma_frac,
+        memory_basis="x",
+        rounds=rounds,
+        seed=seed,
+        reference_p=reference_p,
+    )
+    return run_surface_code_mwpm_full_logical_local(
+        distance=distance,
+        p_map=p_map,
+        shots=shots,
+        rounds=rounds,
+        target_t=target_t,
+        p_fallback=p_fallback,
+        reference_p=reference_p,
+        clip_eps=clip_eps,
+        decompose_errors=decompose_errors,
+        enable_correlations=enable_correlations,
+        **dem_kwargs,
     )
 
 
